@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>人选天选论 · 管理后台</title>
+  <style>
+    :root {
+      --bg: #F7F4ED;
+      --card: #FFFFFF;
+      --text: #2C2C2C;
+      --text-secondary: #8A8A8A;
+      --text-hint: #B8B0A8;
+      --primary: #3A4A5C;
+      --accent: #C84B31;
+      --success: #5B8C7A;
+      --border: #E0DCD4;
+      --stone: #8B6F4E;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    /* ===== 布局 ===== */
+    .app { display: flex; min-height: 100vh; }
+
+    .sidebar {
+      width: 220px;
+      background: var(--primary);
+      color: #fff;
+      padding: 24px 0;
+      flex-shrink: 0;
+    }
+
+    .sidebar-title {
+      font-size: 16px;
+      font-weight: 600;
+      padding: 0 24px 24px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      letter-spacing: 2px;
+    }
+
+    .sidebar-menu { list-style: none; margin-top: 16px; }
+
+    .sidebar-menu li {
+      padding: 12px 24px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.2s;
+      border-left: 3px solid transparent;
+    }
+
+    .sidebar-menu li:hover { background: rgba(255,255,255,0.08); }
+    .sidebar-menu li.active {
+      background: rgba(255,255,255,0.12);
+      border-left-color: #fff;
+    }
+
+    .main { flex: 1; padding: 24px 32px; overflow-y: auto; }
+
+    .page-title {
+      font-size: 22px;
+      font-weight: 600;
+      margin-bottom: 24px;
+      color: var(--primary);
+    }
+
+    /* ===== 卡片 ===== */
+    .card {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    }
+
+    .card-title {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-bottom: 16px;
+    }
+
+    /* ===== 统计卡片 ===== */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .stat-card {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    }
+
+    .stat-label { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
+    .stat-value { font-size: 32px; font-weight: 700; color: var(--primary); }
+    .stat-sub { font-size: 12px; color: var(--text-hint); margin-top: 4px; }
+
+    /* ===== 表格 ===== */
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); font-size: 14px; }
+    th { color: var(--text-secondary); font-weight: 500; font-size: 13px; }
+    tr:hover { background: rgba(0,0,0,0.02); }
+
+    /* ===== 按钮 ===== */
+    .btn {
+      display: inline-block;
+      padding: 8px 20px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-danger { background: var(--accent); color: #fff; }
+    .btn-danger:hover { opacity: 0.9; }
+    .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-secondary); }
+    .btn-outline:hover { border-color: var(--primary); color: var(--primary); }
+    .btn-sm { padding: 4px 12px; font-size: 12px; }
+
+    /* ===== 表单 ===== */
+    .form-group { margin-bottom: 20px; }
+    .form-label { display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; }
+    .form-input, .form-textarea, .form-select {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      color: var(--text);
+      background: #fff;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .form-input:focus, .form-textarea:focus { border-color: var(--primary); }
+    .form-textarea { min-height: 200px; resize: vertical; font-family: inherit; }
+
+    /* ===== 模态框 ===== */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .modal {
+      background: var(--card);
+      border-radius: 16px;
+      padding: 32px;
+      width: 90%;
+      max-width: 700px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+
+    .modal-title { font-size: 18px; font-weight: 600; margin-bottom: 24px; color: var(--primary); }
+    .modal-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px; }
+
+    /* ===== 标签 ===== */
+    .tag {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+    }
+    .tag-published { background: rgba(91,140,122,0.12); color: var(--success); }
+    .tag-draft { background: rgba(138,138,138,0.12); color: var(--text-secondary); }
+
+    /* ===== 空状态 ===== */
+    .empty { text-align: center; padding: 48px; color: var(--text-hint); }
+
+    /* ===== 登录页 ===== */
+    .login-page {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: var(--bg);
+    }
+
+    .login-box {
+      background: var(--card);
+      border-radius: 16px;
+      padding: 48px 40px;
+      width: 380px;
+      text-align: center;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+    }
+
+    .login-box h1 {
+      font-size: 22px;
+      color: var(--primary);
+      margin-bottom: 8px;
+      letter-spacing: 2px;
+    }
+
+    .login-box p { font-size: 13px; color: var(--text-hint); margin-bottom: 32px; }
+
+    #loginError { color: var(--accent); font-size: 13px; margin-top: 12px; display: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script>
+    const API_BASE = '';
+    let authHeader = '';
+    let currentPage = 'dashboard';
+
+    // ===== 认证 =====
+    function checkAuth() {
+      const saved = localStorage.getItem('admin_auth');
+      if (saved) {
+        authHeader = saved;
+        renderApp();
+      } else {
+        renderLogin();
+      }
+    }
+
+    function renderLogin() {
+      document.getElementById('root').innerHTML = `
+        <div class="login-page">
+          <div class="login-box">
+            <h1>人选天选论</h1>
+            <p>管理后台</p>
+            <div class="form-group">
+              <input class="form-input" id="username" placeholder="管理员账号" />
+            </div>
+            <div class="form-group">
+              <input class="form-input" id="password" type="password" placeholder="管理员密码" />
+            </div>
+            <button class="btn btn-primary" style="width:100%;padding:12px" onclick="doLogin()">登录</button>
+            <div id="loginError">账号或密码错误</div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function doLogin() {
+      const u = document.getElementById('username').value;
+      const p = document.getElementById('password').value;
+      authHeader = 'Basic ' + btoa(u + ':' + p);
+
+      try {
+        const res = await apiFetch('/api/admin/dashboard/overview');
+        if (res.code === 0) {
+          localStorage.setItem('admin_auth', authHeader);
+          renderApp();
+        } else {
+          document.getElementById('loginError').style.display = 'block';
+        }
+      } catch (e) {
+        document.getElementById('loginError').style.display = 'block';
+      }
+    }
+
+    function doLogout() {
+      localStorage.removeItem('admin_auth');
+      authHeader = '';
+      renderLogin();
+    }
+
+    // ===== API =====
+    async function apiFetch(url, options = {}) {
+      const res = await fetch(API_BASE + url, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authHeader,
+          ...(options.headers || {}),
+        },
+      });
+      return res.json();
+    }
+
+    // ===== 渲染 =====
+    function renderApp() {
+      document.getElementById('root').innerHTML = `
+        <div class="app">
+          <div class="sidebar">
+            <div class="sidebar-title">人选天选论</div>
+            <ul class="sidebar-menu">
+              <li class="${currentPage === 'dashboard' ? 'active' : ''}" onclick="navigate('dashboard')">📊 数据看板</li>
+              <li class="${currentPage === 'articles' ? 'active' : ''}" onclick="navigate('articles')">📝 文章管理</li>
+              <li class="${currentPage === 'users' ? 'active' : ''}" onclick="navigate('users')">👥 用户管理</li>
+              <li onclick="doLogout()">🚪 退出登录</li>
+            </ul>
+          </div>
+          <div class="main" id="mainContent"></div>
+        </div>
+      `;
+
+      switch (currentPage) {
+        case 'dashboard': renderDashboard(); break;
+        case 'articles': renderArticles(); break;
+        case 'users': renderUsers(); break;
+      }
+    }
+
+    function navigate(page) {
+      currentPage = page;
+      renderApp();
+    }
+
+    // ===== 数据看板 =====
+    async function renderDashboard() {
+      const main = document.getElementById('mainContent');
+      main.innerHTML = '<div class="page-title">数据看板</div><div>加载中...</div>';
+
+      const res = await apiFetch('/api/admin/dashboard/overview');
+      if (res.code !== 0) { main.innerHTML = '<div class="empty">加载失败</div>'; return; }
+
+      const d = res.data;
+      main.innerHTML = `
+        <div class="page-title">数据看板</div>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">总用户数</div>
+            <div class="stat-value">${d.totalUsers}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">今日新增</div>
+            <div class="stat-value">${d.todayNewUsers}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">日活跃</div>
+            <div class="stat-value">${d.dau}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">月活跃</div>
+            <div class="stat-value">${d.mau}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">文章总数</div>
+            <div class="stat-value">${d.totalArticles}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">道痕总数</div>
+            <div class="stat-value">${d.totalDiaries}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">今日道痕</div>
+            <div class="stat-value">${d.todayDiaries}</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">IP 地域分布</div>
+          <div id="ipChart">加载中...</div>
+        </div>
+      `;
+
+      // 加载IP分布
+      const ipRes = await apiFetch('/api/admin/dashboard/ip-distribution');
+      const ipEl = document.getElementById('ipChart');
+      if (ipRes.code === 0 && ipRes.data.length > 0) {
+        let html = '<table><tr><th>地区</th><th>用户数</th></tr>';
+        ipRes.data.forEach(item => {
+          html += `<tr><td>${item.region || '未知'}</td><td>${item.count}</td></tr>`;
+        });
+        html += '</table>';
+        ipEl.innerHTML = html;
+      } else {
+        ipEl.innerHTML = '<div class="empty">暂无数据</div>';
+      }
+    }
+
+    // ===== 文章管理 =====
+    let articlesList = [];
+
+    async function renderArticles() {
+      const main = document.getElementById('mainContent');
+      main.innerHTML = '<div class="page-title">文章管理</div><div>加载中...</div>';
+
+      const res = await apiFetch('/api/admin/articles');
+      if (res.code !== 0) { main.innerHTML = '<div class="empty">加载失败</div>'; return; }
+
+      articlesList = res.data.list || [];
+
+      let tableHtml = '';
+      if (articlesList.length === 0) {
+        tableHtml = '<div class="empty">暂无文章，点击上方按钮创建</div>';
+      } else {
+        tableHtml = `<table>
+          <tr><th>章节</th><th>标题</th><th>状态</th><th>阅读量</th><th>发布时间</th><th>操作</th></tr>
+          ${articlesList.map(a => `
+            <tr>
+              <td>第${a.chapter}章</td>
+              <td>${a.title}</td>
+              <td><span class="tag ${a.status === 'published' ? 'tag-published' : 'tag-draft'}">${a.status === 'published' ? '已发布' : '草稿'}</span></td>
+              <td>${a.viewCount || 0}</td>
+              <td>${a.publishedAt ? new Date(a.publishedAt).toLocaleDateString() : '-'}</td>
+              <td>
+                <button class="btn btn-outline btn-sm" onclick="editArticle('${a.id}')">编辑</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteArticle('${a.id}')">删除</button>
+              </td>
+            </tr>
+          `).join('')}
+        </table>`;
+      }
+
+      main.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px">
+          <div class="page-title" style="margin-bottom:0">文章管理</div>
+          <button class="btn btn-primary" onclick="showArticleModal()">+ 新建文章</button>
+        </div>
+        <div class="card">${tableHtml}</div>
+      `;
+    }
+
+    function showArticleModal(article = null) {
+      const isEdit = !!article;
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.id = 'articleModal';
+      overlay.innerHTML = `
+        <div class="modal">
+          <div class="modal-title">${isEdit ? '编辑文章' : '新建文章'}</div>
+          <div class="form-group">
+            <label class="form-label">章节号</label>
+            <input class="form-input" id="artChapter" type="number" value="${article?.chapter || ''}" placeholder="如：1" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">标题</label>
+            <input class="form-input" id="artTitle" value="${article?.title || ''}" placeholder="文章标题" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">摘要</label>
+            <input class="form-input" id="artSummary" value="${article?.summary || ''}" placeholder="一句话摘要" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">金句（每行一句）</label>
+            <textarea class="form-textarea" id="artQuotes" style="min-height:80px" placeholder="每行一句金句">${(article?.quotes || []).join('\\n')}</textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">正文（支持HTML）</label>
+            <textarea class="form-textarea" id="artContent" style="min-height:300px">${article?.content || ''}</textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">状态</label>
+            <select class="form-select" id="artStatus">
+              <option value="published" ${article?.status === 'published' ? 'selected' : ''}>发布</option>
+              <option value="draft" ${article?.status === 'draft' ? 'selected' : ''}>草稿</option>
+            </select>
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-outline" onclick="closeArticleModal()">取消</button>
+            <button class="btn btn-primary" onclick="saveArticle('${article?.id || ''}')">${isEdit ? '保存' : '创建'}</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+    }
+
+    function closeArticleModal() {
+      const modal = document.getElementById('articleModal');
+      if (modal) modal.remove();
+    }
+
+    async function saveArticle(id) {
+      const data = {
+        chapter: parseInt(document.getElementById('artChapter').value),
+        title: document.getElementById('artTitle').value,
+        summary: document.getElementById('artSummary').value,
+        content: document.getElementById('artContent').value,
+        quotes: document.getElementById('artQuotes').value.split('\n').filter(q => q.trim()),
+        status: document.getElementById('artStatus').value,
+      };
+
+      if (!data.title || !data.chapter) {
+        alert('请填写章节号和标题');
+        return;
+      }
+
+      let res;
+      if (id) {
+        res = await apiFetch(`/api/admin/articles/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+      } else {
+        res = await apiFetch('/api/admin/articles', { method: 'POST', body: JSON.stringify(data) });
+      }
+
+      if (res.code === 0) {
+        closeArticleModal();
+        renderArticles();
+      } else {
+        alert(res.message || '操作失败');
+      }
+    }
+
+    async function editArticle(id) {
+      const article = articlesList.find(a => a.id === id);
+      if (article) {
+        // 获取完整内容
+        const res = await apiFetch(`/api/admin/articles`);
+        if (res.code === 0) {
+          const full = res.data.list.find(a => a.id === id);
+          showArticleModal(full || article);
+        }
+      }
+    }
+
+    async function deleteArticle(id) {
+      if (!confirm('确定要删除这篇文章吗？')) return;
+      const res = await apiFetch(`/api/admin/articles/${id}`, { method: 'DELETE' });
+      if (res.code === 0) {
+        renderArticles();
+      } else {
+        alert(res.message || '删除失败');
+      }
+    }
+
+    // ===== 用户管理 =====
+    async function renderUsers() {
+      const main = document.getElementById('mainContent');
+      main.innerHTML = '<div class="page-title">用户管理</div><div>加载中...</div>';
+
+      const res = await apiFetch('/api/admin/users');
+      if (res.code !== 0) { main.innerHTML = '<div class="empty">加载失败</div>'; return; }
+
+      const users = res.data.list || [];
+
+      let tableHtml = '';
+      if (users.length === 0) {
+        tableHtml = '<div class="empty">暂无用户</div>';
+      } else {
+        tableHtml = `<table>
+          <tr><th>昵称</th><th>手机号</th><th>连续天数</th><th>日记数</th><th>IP地区</th><th>注册时间</th><th>最后活跃</th></tr>
+          ${users.map(u => `
+            <tr>
+              <td>${u.nickname}</td>
+              <td>${u.phone}</td>
+              <td>${u.streakDays}天</td>
+              <td>${u._count?.diaries || 0}篇</td>
+              <td>${u.lastIpRegion || '未知'}</td>
+              <td>${new Date(u.createdAt).toLocaleDateString()}</td>
+              <td>${new Date(u.lastLoginAt || u.createdAt).toLocaleDateString()}</td>
+            </tr>
+          `).join('')}
+        </table>`;
+      }
+
+      main.innerHTML = `
+        <div class="page-title">用户管理</div>
+        <div class="card">${tableHtml}</div>
+      `;
+    }
+
+    // ===== 启动 =====
+    checkAuth();
+  </script>
+</body>
+</html>

@@ -210,6 +210,9 @@ export async function getUsers(req: Request, res: Response): Promise<void> {
           lastLoginIp: true,
           ipRegion: true,
           streakDays: true,
+          _count: {
+            select: { diaries: true },
+          },
         },
         orderBy: { createdAt: 'desc' },
         skip,
@@ -222,6 +225,7 @@ export async function getUsers(req: Request, res: Response): Promise<void> {
     const maskedUsers = users.map(user => ({
       ...user,
       phone: user.phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2'),
+      lastIpRegion: user.ipRegion || '未知',
     }));
 
     success(res, {

@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
+import path from 'path';
 import { config } from './config/env';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import authRoutes from './routes/auth.routes';
@@ -53,6 +54,11 @@ app.use('/api/auth/send-code', smsLimiter);
 // 健康检查
 app.get('/api/health', (_req, res) => {
   res.json({ code: 0, message: 'ok', data: { version: '1.0.0', env: config.nodeEnv } });
+});
+
+// 管理后台静态文件
+app.get('/admin', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'admin', 'index.html'));
 });
 
 // API路由
