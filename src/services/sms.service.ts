@@ -206,7 +206,7 @@ async function sendAliyunSms(phone: string, code: string): Promise<void> {
       phoneNumbers: phone,
       signName: config.aliyun.smsSignName,
       templateCode: config.aliyun.smsTemplateCode,
-      templateParam: JSON.stringify({ code }),
+      templateParam: JSON.stringify({ code, min: '5' }),
     });
 
     const result = await client.sendSms(sendReq);
