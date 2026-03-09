@@ -1,5 +1,22 @@
-// Prisma Schema for 人选天选论 - MySQL生产环境版本
-// 使用方法：将此文件复制为 schema.prisma，然后运行 npx prisma db push
+/**
+ * ===================================================================
+ * Prisma数据库Schema - 人选天选论（MySQL生产环境版本）
+ * ===================================================================
+ *
+ * 使用方法：
+ * 1. 将此文件复制为 schema.prisma（覆盖SQLite版本）
+ * 2. 配置 DATABASE_URL 环境变量为MySQL连接字符串
+ * 3. 运行 npx prisma db push 同步表结构
+ *
+ * MySQL连接字符串格式：
+ * mysql://USER:PASSWORD@HOST:PORT/DATABASE?connection_limit=10&pool_timeout=20
+ *
+ * 索引策略（针对高并发优化）：
+ * - 所有外键字段都有独立索引
+ * - 高频查询字段有索引覆盖
+ * - 联合索引按查询模式设计（最左前缀原则）
+ * - 字段类型使用精确长度，减少索引存储空间
+ */
 
 generator client {
   provider = "prisma-client-js"
@@ -8,10 +25,9 @@ generator client {
 datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
-  // MySQL连接字符串格式：mysql://USER:PASSWORD@HOST:PORT/DATABASE
 }
 
-// 用户表
+/// 用户表
 model User {
   id            String    @id @default(uuid()) @db.VarChar(36)
   phone         String    @unique @db.VarChar(20)
@@ -22,7 +38,7 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   lastLoginAt   DateTime?
-  lastLoginIp   String?   @db.VarChar(45)
+  lastLoginIp   String?   @db.VarChar(45)   // IPv6最长45字符
   ipRegion      String?   @db.VarChar(100)
   streakDays    Int       @default(0)
   lastCheckinAt DateTime?
@@ -30,68 +46,70 @@ model User {
   diaries       Diary[]
   checkins      Checkin[]
 
-  @@index([phone])
-  @@index([lastLoginAt])
-  @@index([createdAt])
+  // 索引：phone已有@unique索引
+  @@index([lastLoginAt])  // DAU/MAU统计查询
+  @@index([createdAt])    // 新增用户趋势查询
   @@map("users")
 }
 
-// 文章表
+/// 文章表
 model Article {
   id          String    @id @default(uuid()) @db.VarChar(36)
   title       String    @db.VarChar(200)
   summary     String?   @db.VarChar(500)
-  content     String    @db.LongText // 富文本HTML内容
-  chapter     Int
+  content     String    @db.LongText        // 富文本HTML内容
+  chapter     Int                            // 章节序号
   status      String    @default("draft") @db.VarChar(20)
   publishedAt DateTime?
+  scheduledAt DateTime?                      // 定时发布时间
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   viewCount   Int       @default(0)
-  quotes      String?   @db.Text // JSON数组，存储金句列表
+  quotes      String?   @db.Text            // JSON数组
 
-  @@index([chapter])
-  @@index([status])
+  // 复合索引：文章列表查询（status=published ORDER BY chapter）
+  @@index([status, chapter])
   @@index([publishedAt])
+  @@index([scheduledAt])  // 定时发布任务扫描
   @@map("articles")
 }
 
-// 道痕日记表（存储加密后的密文）
+/// 道痕日记表（存储加密后的密文）
 model Diary {
   id             String   @id @default(uuid()) @db.VarChar(36)
   userId         String   @db.VarChar(36)
-  encryptedData  String   @db.LongText // AES-256加密后的日记密文
-  iv             String   @db.VarChar(64) // 加密使用的初始化向量
+  encryptedData  String   @db.LongText       // AES-256-GCM密文
+  iv             String   @db.VarChar(64)     // 初始化向量
   mainStone      String?  @db.VarChar(200)
-  mainStoneHash  String?  @db.VarChar(64)
-  diaryDate      String   @db.VarChar(10) // YYYY-MM-DD
+  mainStoneHash  String?  @db.VarChar(64)     // SHA-256 hash
+  diaryDate      String   @db.VarChar(10)     // YYYY-MM-DD
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, diaryDate])
-  @@index([userId])
-  @@index([diaryDate])
+  @@unique([userId, diaryDate])  // 每人每天一篇，同时作为查询索引
+  @@index([userId])              // 查询某用户所有日记
+  @@index([diaryDate])           // 按日期统计（管理后台趋势图）
   @@map("diaries")
 }
 
-// 打卡记录表
+/// 打卡记录表
 model Checkin {
   id          String   @id @default(uuid()) @db.VarChar(36)
   userId      String   @db.VarChar(36)
-  checkinDate String   @db.VarChar(10) // YYYY-MM-DD
+  checkinDate String   @db.VarChar(10)       // YYYY-MM-DD
   streakCount Int      @default(1)
   createdAt   DateTime @default(now())
 
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, checkinDate])
-  @@index([userId])
+  @@unique([userId, checkinDate])  // 每人每天一次打卡
+  @@index([userId])                // 查询某用户所有打卡记录
   @@map("checkins")
 }
 
-// 管理员表
+/// 管理员表
 model Admin {
   id        String   @id @default(uuid()) @db.VarChar(36)
   username  String   @unique @db.VarChar(50)

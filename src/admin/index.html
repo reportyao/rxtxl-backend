@@ -1,9 +1,22 @@
 <!DOCTYPE html>
+<!--
+  人选天选论 - 管理后台
+  ========================
+  单文件SPA管理后台，功能包括：
+  1. 数据看板 - 核心指标统计 + IP地域分布可视化
+  2. 文章管理 - 富文本编辑器(WangEditor) + 定时发布 + 金句管理
+  3. 用户管理 - 用户列表 + 手机号脱敏 + IP地区 + 活跃统计
+
+  认证方式：Basic Auth（用户名密码在.env中配置）
+  技术依赖：WangEditor 5.x CDN
+-->
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>人选天选论 · 管理后台</title>
+  <!-- WangEditor 富文本编辑器 -->
+  <link href="https://unpkg.com/@wangeditor/editor@5.1.23/dist/css/style.css" rel="stylesheet">
   <style>
     :root {
       --bg: #F7F4ED;
@@ -105,6 +118,14 @@
     .stat-value { font-size: 32px; font-weight: 700; color: var(--primary); }
     .stat-sub { font-size: 12px; color: var(--text-hint); margin-top: 4px; }
 
+    /* ===== IP分布条形图 ===== */
+    .ip-bar-chart { margin-top: 8px; }
+    .ip-bar-item { display: flex; align-items: center; margin-bottom: 8px; }
+    .ip-bar-label { width: 80px; font-size: 13px; color: var(--text); text-align: right; padding-right: 12px; flex-shrink: 0; }
+    .ip-bar-track { flex: 1; height: 24px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+    .ip-bar-fill { height: 100%; background: linear-gradient(90deg, var(--primary), var(--success)); border-radius: 4px; transition: width 0.6s ease; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; min-width: 30px; }
+    .ip-bar-count { font-size: 11px; color: #fff; font-weight: 600; }
+
     /* ===== 表格 ===== */
     table { width: 100%; border-collapse: collapse; }
     th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); font-size: 14px; }
@@ -147,6 +168,9 @@
     .form-input:focus, .form-textarea:focus { border-color: var(--primary); }
     .form-textarea { min-height: 200px; resize: vertical; font-family: inherit; }
 
+    .form-row { display: flex; gap: 16px; }
+    .form-row .form-group { flex: 1; }
+
     /* ===== 模态框 ===== */
     .modal-overlay {
       position: fixed;
@@ -163,13 +187,22 @@
       border-radius: 16px;
       padding: 32px;
       width: 90%;
-      max-width: 700px;
+      max-width: 900px;
       max-height: 90vh;
       overflow-y: auto;
     }
 
     .modal-title { font-size: 18px; font-weight: 600; margin-bottom: 24px; color: var(--primary); }
     .modal-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px; }
+
+    /* ===== 富文本编辑器容器 ===== */
+    .editor-container {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .editor-container .w-e-toolbar { border-bottom: 1px solid var(--border) !important; }
+    .editor-container .w-e-text-container { min-height: 300px !important; }
 
     /* ===== 标签 ===== */
     .tag {
@@ -180,6 +213,7 @@
     }
     .tag-published { background: rgba(91,140,122,0.12); color: var(--success); }
     .tag-draft { background: rgba(138,138,138,0.12); color: var(--text-secondary); }
+    .tag-scheduled { background: rgba(200,75,49,0.12); color: var(--accent); }
 
     /* ===== 空状态 ===== */
     .empty { text-align: center; padding: 48px; color: var(--text-hint); }
@@ -217,12 +251,22 @@
 <body>
   <div id="root"></div>
 
+  <!-- WangEditor 富文本编辑器核心库 -->
+  <script src="https://unpkg.com/@wangeditor/editor@5.1.23/dist/index.js"></script>
+
   <script>
+    /**
+     * ===== 全局状态 =====
+     */
     const API_BASE = '';
     let authHeader = '';
     let currentPage = 'dashboard';
+    let editorInstance = null; // WangEditor 实例引用
 
-    // ===== 认证 =====
+    /**
+     * ===== 认证模块 =====
+     * 使用 Basic Auth，凭证存储在 localStorage
+     */
     function checkAuth() {
       const saved = localStorage.getItem('admin_auth');
       if (saved) {
@@ -276,7 +320,10 @@
       renderLogin();
     }
 
-    // ===== API =====
+    /**
+     * ===== API 请求封装 =====
+     * 统一处理请求头和JSON解析
+     */
     async function apiFetch(url, options = {}) {
       const res = await fetch(API_BASE + url, {
         ...options,
@@ -289,8 +336,13 @@
       return res.json();
     }
 
-    // ===== 渲染 =====
+    /**
+     * ===== 主布局渲染 =====
+     */
     function renderApp() {
+      // 销毁旧的编辑器实例，防止内存泄漏
+      destroyEditor();
+
       document.getElementById('root').innerHTML = `
         <div class="app">
           <div class="sidebar">
@@ -318,7 +370,10 @@
       renderApp();
     }
 
-    // ===== 数据看板 =====
+    /**
+     * ===== 数据看板 =====
+     * 展示核心指标 + IP地域分布可视化条形图
+     */
     async function renderDashboard() {
       const main = document.getElementById('mainContent');
       main.innerHTML = '<div class="page-title">数据看板</div><div>加载中...</div>';
@@ -366,22 +421,36 @@
         </div>
       `;
 
-      // 加载IP分布
+      // 加载IP分布数据并渲染可视化条形图
       const ipRes = await apiFetch('/api/admin/dashboard/ip-distribution');
       const ipEl = document.getElementById('ipChart');
       if (ipRes.code === 0 && ipRes.data.length > 0) {
-        let html = '<table><tr><th>地区</th><th>用户数</th></tr>';
+        const maxCount = Math.max(...ipRes.data.map(i => i.count));
+        let html = '<div class="ip-bar-chart">';
         ipRes.data.forEach(item => {
-          html += `<tr><td>${item.region || '未知'}</td><td>${item.count}</td></tr>`;
+          const pct = Math.max((item.count / maxCount) * 100, 5);
+          html += `
+            <div class="ip-bar-item">
+              <div class="ip-bar-label">${item.region || '未知'}</div>
+              <div class="ip-bar-track">
+                <div class="ip-bar-fill" style="width:${pct}%">
+                  <span class="ip-bar-count">${item.count}</span>
+                </div>
+              </div>
+            </div>
+          `;
         });
-        html += '</table>';
+        html += '</div>';
         ipEl.innerHTML = html;
       } else {
         ipEl.innerHTML = '<div class="empty">暂无数据</div>';
       }
     }
 
-    // ===== 文章管理 =====
+    /**
+     * ===== 文章管理 =====
+     * 支持：新建/编辑/删除文章、富文本编辑器、定时发布
+     */
     let articlesList = [];
 
     async function renderArticles() {
@@ -399,19 +468,30 @@
       } else {
         tableHtml = `<table>
           <tr><th>章节</th><th>标题</th><th>状态</th><th>阅读量</th><th>发布时间</th><th>操作</th></tr>
-          ${articlesList.map(a => `
-            <tr>
-              <td>第${a.chapter}章</td>
-              <td>${a.title}</td>
-              <td><span class="tag ${a.status === 'published' ? 'tag-published' : 'tag-draft'}">${a.status === 'published' ? '已发布' : '草稿'}</span></td>
-              <td>${a.viewCount || 0}</td>
-              <td>${a.publishedAt ? new Date(a.publishedAt).toLocaleDateString() : '-'}</td>
-              <td>
-                <button class="btn btn-outline btn-sm" onclick="editArticle('${a.id}')">编辑</button>
-                <button class="btn btn-danger btn-sm" onclick="deleteArticle('${a.id}')">删除</button>
-              </td>
-            </tr>
-          `).join('')}
+          ${articlesList.map(a => {
+            // 状态标签：已发布/草稿/定时发布
+            let statusTag = '';
+            if (a.status === 'published') {
+              statusTag = '<span class="tag tag-published">已发布</span>';
+            } else if (a.scheduledAt && new Date(a.scheduledAt) > new Date()) {
+              statusTag = '<span class="tag tag-scheduled">定时发布</span>';
+            } else {
+              statusTag = '<span class="tag tag-draft">草稿</span>';
+            }
+            return `
+              <tr>
+                <td>第${a.chapter}章</td>
+                <td>${escapeHtml(a.title)}</td>
+                <td>${statusTag}</td>
+                <td>${a.viewCount || 0}</td>
+                <td>${a.publishedAt ? new Date(a.publishedAt).toLocaleDateString() : '-'}</td>
+                <td>
+                  <button class="btn btn-outline btn-sm" onclick="editArticle('${a.id}')">编辑</button>
+                  <button class="btn btn-danger btn-sm" onclick="deleteArticle('${a.id}')">删除</button>
+                </td>
+              </tr>
+            `;
+          }).join('')}
         </table>`;
       }
 
@@ -424,7 +504,15 @@
       `;
     }
 
+    /**
+     * 显示文章编辑弹窗
+     * 集成 WangEditor 富文本编辑器
+     * @param {Object|null} article - 编辑时传入文章对象，新建时为null
+     */
     function showArticleModal(article = null) {
+      // 先销毁旧编辑器
+      destroyEditor();
+
       const isEdit = !!article;
       const overlay = document.createElement('div');
       overlay.className = 'modal-overlay';
@@ -432,32 +520,42 @@
       overlay.innerHTML = `
         <div class="modal">
           <div class="modal-title">${isEdit ? '编辑文章' : '新建文章'}</div>
-          <div class="form-group">
-            <label class="form-label">章节号</label>
-            <input class="form-input" id="artChapter" type="number" value="${article?.chapter || ''}" placeholder="如：1" />
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">章节号</label>
+              <input class="form-input" id="artChapter" type="number" value="${article?.chapter || ''}" placeholder="如：1" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">状态</label>
+              <select class="form-select" id="artStatus" onchange="toggleSchedule()">
+                <option value="published" ${article?.status === 'published' ? 'selected' : ''}>立即发布</option>
+                <option value="draft" ${article?.status === 'draft' ? 'selected' : ''}>草稿</option>
+                <option value="scheduled">定时发布</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group" id="scheduleGroup" style="display:none">
+            <label class="form-label">定时发布时间</label>
+            <input class="form-input" id="artScheduledAt" type="datetime-local" value="" />
           </div>
           <div class="form-group">
             <label class="form-label">标题</label>
-            <input class="form-input" id="artTitle" value="${article?.title || ''}" placeholder="文章标题" />
+            <input class="form-input" id="artTitle" value="${escapeHtml(article?.title || '')}" placeholder="文章标题" />
           </div>
           <div class="form-group">
             <label class="form-label">摘要</label>
-            <input class="form-input" id="artSummary" value="${article?.summary || ''}" placeholder="一句话摘要" />
+            <input class="form-input" id="artSummary" value="${escapeHtml(article?.summary || '')}" placeholder="一句话摘要" />
           </div>
           <div class="form-group">
             <label class="form-label">金句（每行一句）</label>
-            <textarea class="form-textarea" id="artQuotes" style="min-height:80px" placeholder="每行一句金句">${(article?.quotes || []).join('\\n')}</textarea>
+            <textarea class="form-textarea" id="artQuotes" style="min-height:80px" placeholder="每行一句金句">${(article?.quotes || []).join('\n')}</textarea>
           </div>
           <div class="form-group">
-            <label class="form-label">正文（支持HTML）</label>
-            <textarea class="form-textarea" id="artContent" style="min-height:300px">${article?.content || ''}</textarea>
-          </div>
-          <div class="form-group">
-            <label class="form-label">状态</label>
-            <select class="form-select" id="artStatus">
-              <option value="published" ${article?.status === 'published' ? 'selected' : ''}>发布</option>
-              <option value="draft" ${article?.status === 'draft' ? 'selected' : ''}>草稿</option>
-            </select>
+            <label class="form-label">正文内容</label>
+            <div class="editor-container">
+              <div id="editorToolbar"></div>
+              <div id="editorContent" style="min-height:300px"></div>
+            </div>
           </div>
           <div class="modal-actions">
             <button class="btn btn-outline" onclick="closeArticleModal()">取消</button>
@@ -466,22 +564,123 @@
         </div>
       `;
       document.body.appendChild(overlay);
+
+      // 初始化 WangEditor 富文本编辑器
+      initEditor(article?.content || '');
+    }
+
+    /**
+     * 初始化 WangEditor 5.x 富文本编辑器
+     * @param {string} initialContent - 初始HTML内容
+     */
+    function initEditor(initialContent) {
+      const E = window.wangEditor;
+      if (!E) {
+        // WangEditor CDN加载失败，降级为textarea
+        console.warn('WangEditor未加载，降级为textarea');
+        const container = document.querySelector('.editor-container');
+        if (container) {
+          container.innerHTML = `<textarea class="form-textarea" id="editorFallback" style="min-height:300px">${initialContent}</textarea>`;
+        }
+        return;
+      }
+
+      // 创建编辑器和工具栏
+      const editorConfig = {
+        placeholder: '请输入文章正文...',
+        onChange(editor) {
+          // 编辑器内容变化时的回调（可用于自动保存等）
+        },
+      };
+
+      const toolbarConfig = {
+        // 精简工具栏，只保留常用功能
+        excludeKeys: [
+          'group-video', 'insertVideo', 'uploadVideo',
+          'insertTable', 'codeBlock', 'todo',
+        ],
+      };
+
+      const editor = E.createEditor({
+        selector: '#editorContent',
+        html: initialContent,
+        config: editorConfig,
+        mode: 'default',
+      });
+
+      E.createToolbar({
+        editor,
+        selector: '#editorToolbar',
+        config: toolbarConfig,
+        mode: 'default',
+      });
+
+      editorInstance = editor;
+    }
+
+    /**
+     * 销毁编辑器实例，防止内存泄漏
+     */
+    function destroyEditor() {
+      if (editorInstance) {
+        try { editorInstance.destroy(); } catch (e) {}
+        editorInstance = null;
+      }
+    }
+
+    /**
+     * 获取编辑器内容
+     * 优先从WangEditor获取，降级从textarea获取
+     */
+    function getEditorContent() {
+      if (editorInstance) {
+        return editorInstance.getHtml();
+      }
+      const fallback = document.getElementById('editorFallback');
+      return fallback ? fallback.value : '';
+    }
+
+    /**
+     * 切换定时发布时间输入框的显示/隐藏
+     */
+    function toggleSchedule() {
+      const status = document.getElementById('artStatus').value;
+      const group = document.getElementById('scheduleGroup');
+      if (group) {
+        group.style.display = status === 'scheduled' ? 'block' : 'none';
+      }
     }
 
     function closeArticleModal() {
+      destroyEditor();
       const modal = document.getElementById('articleModal');
       if (modal) modal.remove();
     }
 
+    /**
+     * 保存文章（新建或编辑）
+     * @param {string} id - 文章ID，空字符串表示新建
+     */
     async function saveArticle(id) {
+      const status = document.getElementById('artStatus').value;
       const data = {
         chapter: parseInt(document.getElementById('artChapter').value),
         title: document.getElementById('artTitle').value,
         summary: document.getElementById('artSummary').value,
-        content: document.getElementById('artContent').value,
+        content: getEditorContent(),
         quotes: document.getElementById('artQuotes').value.split('\n').filter(q => q.trim()),
-        status: document.getElementById('artStatus').value,
+        status: status === 'scheduled' ? 'draft' : status,
       };
+
+      // 定时发布：将scheduledAt传给后端
+      if (status === 'scheduled') {
+        const scheduledAt = document.getElementById('artScheduledAt').value;
+        if (!scheduledAt) {
+          alert('请选择定时发布时间');
+          return;
+        }
+        data.scheduledAt = new Date(scheduledAt).toISOString();
+      }
 
       if (!data.title || !data.chapter) {
         alert('请填写章节号和标题');
@@ -503,16 +702,25 @@
       }
     }
 
+    /**
+     * 编辑文章 - 从列表数据中获取文章详情
+     */
     async function editArticle(id) {
-      // 直接从列表数据中获取（管理后台列表API已返回完整内容）
       const article = articlesList.find(a => a.id === id);
       if (article) {
+        // 如果quotes是字符串（JSON），解析为数组
+        if (typeof article.quotes === 'string') {
+          try { article.quotes = JSON.parse(article.quotes); } catch (e) { article.quotes = []; }
+        }
         showArticleModal(article);
       }
     }
 
+    /**
+     * 删除文章 - 需二次确认
+     */
     async function deleteArticle(id) {
-      if (!confirm('确定要删除这篇文章吗？')) return;
+      if (!confirm('确定要删除这篇文章吗？此操作不可恢复。')) return;
       const res = await apiFetch(`/api/admin/articles/${id}`, { method: 'DELETE' });
       if (res.code === 0) {
         renderArticles();
@@ -521,7 +729,10 @@
       }
     }
 
-    // ===== 用户管理 =====
+    /**
+     * ===== 用户管理 =====
+     * 展示用户列表，手机号中间四位脱敏处理
+     */
     async function renderUsers() {
       const main = document.getElementById('mainContent');
       main.innerHTML = '<div class="page-title">用户管理</div><div>加载中...</div>';
@@ -539,10 +750,10 @@
           <tr><th>昵称</th><th>手机号</th><th>连续天数</th><th>日记数</th><th>IP地区</th><th>注册时间</th><th>最后活跃</th></tr>
           ${users.map(u => `
             <tr>
-              <td>${u.nickname}</td>
-              <td>${u.phone}</td>
-              <td>${u.streakDays}天</td>
-              <td>${u._count?.diaries || 0}篇</td>
+              <td>${escapeHtml(u.nickname)}</td>
+              <td>${maskPhone(u.phone)}</td>
+              <td>${u.streakDays || 0}天</td>
+              <td>${u._count?.diaries || u.diaryCount || 0}篇</td>
               <td>${u.lastIpRegion || '未知'}</td>
               <td>${new Date(u.createdAt).toLocaleDateString()}</td>
               <td>${new Date(u.lastLoginAt || u.createdAt).toLocaleDateString()}</td>
@@ -557,7 +768,33 @@
       `;
     }
 
-    // ===== 启动 =====
+    /**
+     * ===== 工具函数 =====
+     */
+
+    /**
+     * 手机号脱敏：138****1234
+     * @param {string} phone - 原始手机号
+     * @returns {string} 脱敏后的手机号
+     */
+    function maskPhone(phone) {
+      if (!phone || phone.length < 7) return phone || '';
+      return phone.substring(0, 3) + '****' + phone.substring(7);
+    }
+
+    /**
+     * HTML转义，防止XSS
+     * @param {string} str - 原始字符串
+     * @returns {string} 转义后的安全字符串
+     */
+    function escapeHtml(str) {
+      if (!str) return '';
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // ===== 启动应用 =====
     checkAuth();
   </script>
 </body>
