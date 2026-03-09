@@ -44,6 +44,7 @@ model Article {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   viewCount   Int      @default(0)
+  quotes      String?  // JSON数组，存储金句列表
 
   @@map("articles")
 }

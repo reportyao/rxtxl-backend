@@ -4,7 +4,7 @@ import { sendVerificationCode, verifyCode } from '../services/sms.service';
 import { generateToken } from '../utils/jwt';
 import { getClientIp, resolveIpRegion } from '../utils/ip';
 import { success, error, validationError } from '../utils/response';
-import bcrypt from 'bcryptjs';
+// bcrypt不再需要 - PIN码hash在前端完成，服务器只存储hash值
 
 /**
  * 发送验证码
@@ -124,10 +124,10 @@ export async function login(req: Request, res: Response): Promise<void> {
 export async function setPin(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user!.userId;
-    const { pin, salt } = req.body;
+    const { pinHash, salt } = req.body;
 
-    if (!pin || pin.length !== 4 || !/^\d{4}$/.test(pin)) {
-      validationError(res, 'PIN码必须为4位数字');
+    if (!pinHash) {
+      validationError(res, '缺少PIN码哈希值');
       return;
     }
 
@@ -136,9 +136,8 @@ export async function setPin(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // 对PIN进行hash存储（用于验证PIN是否正确，不是加密密钥）
-    const pinHash = await bcrypt.hash(pin, 10);
-
+    // 存储前端传来的pinHash和salt
+    // PIN码明文永远不会发送到服务器
     await prisma.user.update({
       where: { id: userId },
       data: { pinHash, pinSalt: salt },
@@ -158,10 +157,10 @@ export async function setPin(req: Request, res: Response): Promise<void> {
 export async function verifyPin(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user!.userId;
-    const { pin } = req.body;
+    const { pinHash } = req.body;
 
-    if (!pin || pin.length !== 4) {
-      validationError(res, 'PIN码必须为4位数字');
+    if (!pinHash) {
+      validationError(res, '缺少PIN码哈希值');
       return;
     }
 
@@ -171,8 +170,8 @@ export async function verifyPin(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const isMatch = await bcrypt.compare(pin, user.pinHash);
-    if (!isMatch) {
+    // 比较前端发来的hash与存储的hash是否一致
+    if (pinHash !== user.pinHash) {
       validationError(res, 'PIN码错误');
       return;
     }
@@ -191,7 +190,7 @@ export async function verifyPin(req: Request, res: Response): Promise<void> {
 export async function resetPin(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user!.userId;
-    const { phone, code, newPin, newSalt } = req.body;
+    const { phone, code, newPinHash, newSalt } = req.body;
 
     // 验证手机号
     const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -207,8 +206,8 @@ export async function resetPin(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    if (!newPin || newPin.length !== 4 || !/^\d{4}$/.test(newPin)) {
-      validationError(res, '新PIN码必须为4位数字');
+    if (!newPinHash || !newSalt) {
+      validationError(res, '缺少新PIN码哈希值或盐值');
       return;
     }
 
@@ -216,10 +215,9 @@ export async function resetPin(req: Request, res: Response): Promise<void> {
     await prisma.diary.deleteMany({ where: { userId } });
 
     // 重置PIN码
-    const pinHash = await bcrypt.hash(newPin, 10);
     await prisma.user.update({
       where: { id: userId },
-      data: { pinHash, pinSalt: newSalt },
+      data: { pinHash: newPinHash, pinSalt: newSalt },
     });
 
     success(res, null, 'PIN码已重置，历史日记数据已清除');

@@ -72,11 +72,11 @@ async function updateCheckin(userId: string, diaryDate: string): Promise<void> {
 
   if (existingCheckin) return; // 已打卡，不重复计算
 
-  // 计算连续天数
-  const today = new Date(diaryDate);
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toISOString().split('T')[0];
+  // 计算连续天数（使用纯字符串日期计算，避免时区问题）
+  const [year, month, day] = diaryDate.split('-').map(Number);
+  const todayDate = new Date(year, month - 1, day); // 本地时间构造
+  todayDate.setDate(todayDate.getDate() - 1);
+  const yesterdayStr = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
 
   const yesterdayCheckin = await prisma.checkin.findUnique({
     where: { userId_checkinDate: { userId, checkinDate: yesterdayStr } },
@@ -167,7 +167,7 @@ export async function getDiaries(req: Request, res: Response): Promise<void> {
 export async function getDiaryDetail(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const diary = await prisma.diary.findFirst({
       where: { id, userId },
@@ -210,15 +210,18 @@ export async function getCheckins(req: Request, res: Response): Promise<void> {
       orderBy: { checkinDate: 'asc' },
     });
 
-    // 获取用户当前连续天数
+    // 获取用户当前连续天数和总打卡天数
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: { streakDays: true },
     });
 
+    const totalCheckins = await prisma.checkin.count({ where: { userId } });
+
     success(res, {
       checkins,
       currentStreak: user?.streakDays || 0,
+      totalCheckins,
     });
   } catch (err) {
     console.error('[getCheckins]', err);
@@ -296,7 +299,7 @@ export async function getStones(req: Request, res: Response): Promise<void> {
 export async function deleteDiary(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const diary = await prisma.diary.findFirst({
       where: { id, userId },

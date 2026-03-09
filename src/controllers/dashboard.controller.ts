@@ -23,6 +23,8 @@ export async function getOverview(req: Request, res: Response): Promise<void> {
       totalArticles,
       totalDiaries,
       todayDiaries,
+      dau,
+      mau,
     ] = await Promise.all([
       prisma.user.count(),
       prisma.user.count({
@@ -33,17 +35,13 @@ export async function getOverview(req: Request, res: Response): Promise<void> {
       prisma.diary.count({
         where: { diaryDate: today },
       }),
+      prisma.user.count({
+        where: { lastLoginAt: { gte: todayStart } },
+      }),
+      prisma.user.count({
+        where: { lastLoginAt: { gte: thirtyDaysAgo } },
+      }),
     ]);
-
-    // 计算DAU（今天有登录或写日记的用户数）
-    const dau = await prisma.user.count({
-      where: { lastLoginAt: { gte: todayStart } },
-    });
-
-    // 计算MAU
-    const mau = await prisma.user.count({
-      where: { lastLoginAt: { gte: thirtyDaysAgo } },
-    });
 
     success(res, {
       totalUsers,
@@ -62,31 +60,56 @@ export async function getOverview(req: Request, res: Response): Promise<void> {
 
 /**
  * 获取用户增长趋势（最近30天）
+ * 优化：使用批量查询替代N+1循环查询
  * GET /api/admin/dashboard/user-trend
  */
 export async function getUserTrend(req: Request, res: Response): Promise<void> {
   try {
     const days = parseInt(req.query.days as string) || 30;
-    const trend: { date: string; newUsers: number; activeUsers: number }[] = [];
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days + 1);
+    const startDateStr = startDate.toISOString().split('T')[0];
+    const startDateTime = new Date(startDateStr);
 
+    // 批量获取时间范围内的所有新用户
+    const newUsers = await prisma.user.findMany({
+      where: { createdAt: { gte: startDateTime } },
+      select: { createdAt: true },
+    });
+
+    // 批量获取时间范围内的所有活跃用户
+    const activeUsers = await prisma.user.findMany({
+      where: { lastLoginAt: { gte: startDateTime } },
+      select: { lastLoginAt: true },
+    });
+
+    // 在内存中按日期分组
+    const newUsersByDate: Record<string, number> = {};
+    const activeUsersByDate: Record<string, number> = {};
+
+    for (const u of newUsers) {
+      const dateStr = u.createdAt.toISOString().split('T')[0];
+      newUsersByDate[dateStr] = (newUsersByDate[dateStr] || 0) + 1;
+    }
+
+    for (const u of activeUsers) {
+      if (u.lastLoginAt) {
+        const dateStr = u.lastLoginAt.toISOString().split('T')[0];
+        activeUsersByDate[dateStr] = (activeUsersByDate[dateStr] || 0) + 1;
+      }
+    }
+
+    // 生成趋势数据
+    const trend: { date: string; newUsers: number; activeUsers: number }[] = [];
     for (let i = days - 1; i >= 0; i--) {
       const date = new Date();
       date.setDate(date.getDate() - i);
       const dateStr = date.toISOString().split('T')[0];
-      const dayStart = new Date(dateStr);
-      const dayEnd = new Date(dateStr);
-      dayEnd.setDate(dayEnd.getDate() + 1);
-
-      const [newUsers, activeUsers] = await Promise.all([
-        prisma.user.count({
-          where: { createdAt: { gte: dayStart, lt: dayEnd } },
-        }),
-        prisma.user.count({
-          where: { lastLoginAt: { gte: dayStart, lt: dayEnd } },
-        }),
-      ]);
-
-      trend.push({ date: dateStr, newUsers, activeUsers });
+      trend.push({
+        date: dateStr,
+        newUsers: newUsersByDate[dateStr] || 0,
+        activeUsers: activeUsersByDate[dateStr] || 0,
+      });
     }
 
     success(res, trend);
@@ -98,24 +121,37 @@ export async function getUserTrend(req: Request, res: Response): Promise<void> {
 
 /**
  * 获取日记写作趋势（最近30天）
+ * 优化：使用批量查询替代N+1循环查询
  * GET /api/admin/dashboard/diary-trend
  */
 export async function getDiaryTrend(req: Request, res: Response): Promise<void> {
   try {
     const days = parseInt(req.query.days as string) || 30;
-    const trend: { date: string; diaryCount: number }[] = [];
 
+    // 生成日期范围
+    const dates: string[] = [];
     for (let i = days - 1; i >= 0; i--) {
       const date = new Date();
       date.setDate(date.getDate() - i);
-      const dateStr = date.toISOString().split('T')[0];
-
-      const diaryCount = await prisma.diary.count({
-        where: { diaryDate: dateStr },
-      });
-
-      trend.push({ date: dateStr, diaryCount });
+      dates.push(date.toISOString().split('T')[0]);
     }
+
+    // 批量查询所有日期的日记数量
+    const diaries = await prisma.diary.findMany({
+      where: { diaryDate: { in: dates } },
+      select: { diaryDate: true },
+    });
+
+    // 在内存中按日期分组
+    const diaryByDate: Record<string, number> = {};
+    for (const d of diaries) {
+      diaryByDate[d.diaryDate] = (diaryByDate[d.diaryDate] || 0) + 1;
+    }
+
+    const trend = dates.map(date => ({
+      date,
+      diaryCount: diaryByDate[date] || 0,
+    }));
 
     success(res, trend);
   } catch (err) {
@@ -225,6 +261,7 @@ export async function getUsers(req: Request, res: Response): Promise<void> {
     const maskedUsers = users.map(user => ({
       ...user,
       phone: user.phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2'),
+      diaryCount: user._count.diaries,
       lastIpRegion: user.ipRegion || '未知',
     }));
 

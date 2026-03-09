@@ -49,7 +49,7 @@ export async function getArticles(req: Request, res: Response): Promise<void> {
  */
 export async function getArticleDetail(req: Request, res: Response): Promise<void> {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const article = await prisma.article.findFirst({
       where: { id, status: 'published' },
@@ -80,8 +80,17 @@ export async function getArticleDetail(req: Request, res: Response): Promise<voi
       }),
     ]);
 
+    // 解析quotes JSON字符串
+    let quotes: string[] = [];
+    try {
+      quotes = article.quotes ? JSON.parse(article.quotes) : [];
+    } catch (e) {
+      quotes = [];
+    }
+
     success(res, {
       ...article,
+      quotes,
       viewCount: article.viewCount + 1,
       prevArticle,
       nextArticle,
@@ -139,7 +148,7 @@ export async function adminGetArticles(req: Request, res: Response): Promise<voi
  */
 export async function adminCreateArticle(req: Request, res: Response): Promise<void> {
   try {
-    const { title, summary, content, chapter, status: articleStatus } = req.body;
+    const { title, summary, content, chapter, status: articleStatus, quotes } = req.body;
 
     if (!title || !content || chapter === undefined) {
       validationError(res, '标题、内容和章节号为必填项');
@@ -161,6 +170,7 @@ export async function adminCreateArticle(req: Request, res: Response): Promise<v
         chapter,
         status: articleStatus || 'draft',
         publishedAt: articleStatus === 'published' ? new Date() : null,
+        quotes: quotes ? JSON.stringify(quotes) : null,
       },
     });
 
@@ -177,8 +187,9 @@ export async function adminCreateArticle(req: Request, res: Response): Promise<v
  */
 export async function adminUpdateArticle(req: Request, res: Response): Promise<void> {
   try {
-    const { id } = req.params;
-    const { title, summary, content, chapter, status: articleStatus } = req.body;
+    const id = req.params.id as string;
+
+    const { title, summary, content, chapter, status: articleStatus, quotes } = req.body;
 
     const existing = await prisma.article.findUnique({ where: { id } });
     if (!existing) {
@@ -200,6 +211,7 @@ export async function adminUpdateArticle(req: Request, res: Response): Promise<v
     if (summary !== undefined) updateData.summary = summary;
     if (content !== undefined) updateData.content = content;
     if (chapter !== undefined) updateData.chapter = chapter;
+    if (quotes !== undefined) updateData.quotes = JSON.stringify(quotes);
     if (articleStatus !== undefined) {
       updateData.status = articleStatus;
       if (articleStatus === 'published' && !existing.publishedAt) {
@@ -225,7 +237,7 @@ export async function adminUpdateArticle(req: Request, res: Response): Promise<v
  */
 export async function adminDeleteArticle(req: Request, res: Response): Promise<void> {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const existing = await prisma.article.findUnique({ where: { id } });
     if (!existing) {

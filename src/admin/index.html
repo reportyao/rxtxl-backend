@@ -504,14 +504,10 @@
     }
 
     async function editArticle(id) {
+      // 直接从列表数据中获取（管理后台列表API已返回完整内容）
       const article = articlesList.find(a => a.id === id);
       if (article) {
-        // 获取完整内容
-        const res = await apiFetch(`/api/admin/articles`);
-        if (res.code === 0) {
-          const full = res.data.list.find(a => a.id === id);
-          showArticleModal(full || article);
-        }
+        showArticleModal(article);
       }
     }
 
