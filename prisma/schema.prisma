@@ -1,0 +1,92 @@
+// Prisma Schema for 人选天选论
+// 开发环境使用SQLite，生产环境切换为MySQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// 用户表
+model User {
+  id            String    @id @default(uuid())
+  phone         String    @unique
+  nickname      String?
+  avatar        String?
+  pinHash       String?   // PIN码的hash值（用于验证PIN是否正确，非加密密钥）
+  pinSalt       String?   // 用于PBKDF2的盐值
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastLoginAt   DateTime?
+  lastLoginIp   String?
+  ipRegion      String?   // IP归属地（省份）
+  streakDays    Int       @default(0) // 当前连续打卡天数
+  lastCheckinAt DateTime? // 最后一次打卡时间
+
+  diaries       Diary[]
+  checkins      Checkin[]
+
+  @@map("users")
+}
+
+// 文章表
+model Article {
+  id          String   @id @default(uuid())
+  title       String
+  summary     String?
+  content     String   // 富文本HTML内容
+  chapter     Int      // 章节序号
+  status      String   @default("draft") // draft | published | archived
+  publishedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  viewCount   Int      @default(0)
+
+  @@map("articles")
+}
+
+// 道痕日记表（存储加密后的密文）
+model Diary {
+  id             String   @id @default(uuid())
+  userId         String
+  encryptedData  String   // AES-256加密后的日记密文
+  iv             String   // 加密使用的初始化向量
+  mainStone      String?  // 主石头（第六层内容的摘要，用于石头收藏馆展示，用户可选是否保存明文摘要）
+  mainStoneHash  String?  // 主石头内容的hash，用于聚合相同石头
+  diaryDate      String   // 日记日期 YYYY-MM-DD
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, diaryDate])
+  @@map("diaries")
+}
+
+// 打卡记录表
+model Checkin {
+  id          String   @id @default(uuid())
+  userId      String
+  checkinDate String   // 打卡日期 YYYY-MM-DD
+  streakCount Int      @default(1) // 当时的连续天数
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, checkinDate])
+  @@map("checkins")
+}
+
+// 管理员表
+model Admin {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  password  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("admins")
+}
