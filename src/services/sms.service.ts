@@ -208,8 +208,9 @@ async function sendAliyunSms(phone: string, code: string): Promise<void> {
     });
 
     const result = await client.sendSms(sendReq);
-    if (result.body.code !== 'OK') {
-      throw new Error(`阿里云短信API返回错误: ${result.body.code} - ${result.body.message}`);
+    if (!result.body || result.body.code !== 'OK') {
+      const errorMsg = result.body?.message || '\u672a\u77e5\u9519\u8bef';
+      throw new Error(`\u963f\u91cc\u4e91\u77ed\u4fe1API\u8fd4\u56de\u9519\u8bef: ${result.body?.code} - ${errorMsg}`);
     }
 
     console.log(`[SMS] 成功发送验证码到 ${phone}`);

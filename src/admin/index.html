@@ -9,6 +9,9 @@
 
   认证方式：Basic Auth（用户名密码在.env中配置）
   技术依赖：WangEditor 5.x CDN
+
+  [安全修复] 移除所有内联事件处理器（onclick等），改用 addEventListener
+  以符合 CSP script-src-attr 'none' 策略
 -->
 <html lang="zh-CN">
 <head>
@@ -264,6 +267,58 @@
     let editorInstance = null; // WangEditor 实例引用
 
     /**
+     * ===== 事件委托 =====
+     * [安全修复] 使用事件委托替代所有内联 onclick 事件处理器
+     * 这样可以符合 CSP script-src-attr 'none' 策略
+     */
+    document.addEventListener('click', function(e) {
+      const target = e.target.closest('[data-action]');
+      if (!target) return;
+
+      const action = target.getAttribute('data-action');
+      const param = target.getAttribute('data-param') || '';
+
+      switch (action) {
+        case 'login': doLogin(); break;
+        case 'logout': doLogout(); break;
+        case 'navigate': navigate(param); break;
+        case 'new-article': showArticleModal(); break;
+        case 'edit-article': editArticle(param); break;
+        case 'delete-article': deleteArticle(param); break;
+        case 'save-article': saveArticle(param); break;
+        case 'close-modal': closeArticleModal(); break;
+        case 'toggle-schedule': toggleSchedule(); break;
+        default: break;
+      }
+    });
+
+    /**
+     * 监听 change 事件（用于 select 元素）
+     */
+    document.addEventListener('change', function(e) {
+      const target = e.target.closest('[data-change]');
+      if (!target) return;
+
+      const action = target.getAttribute('data-change');
+      if (action === 'toggle-schedule') {
+        toggleSchedule();
+      }
+    });
+
+    /**
+     * 监听键盘事件（登录页回车提交）
+     */
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        const passwordInput = document.getElementById('password');
+        const usernameInput = document.getElementById('username');
+        if (document.activeElement === passwordInput || document.activeElement === usernameInput) {
+          doLogin();
+        }
+      }
+    });
+
+    /**
      * ===== 认证模块 =====
      * 使用 Basic Auth，凭证存储在 localStorage
      */
@@ -278,27 +333,31 @@
     }
 
     function renderLogin() {
-      document.getElementById('root').innerHTML = `
-        <div class="login-page">
-          <div class="login-box">
-            <h1>人选天选论</h1>
-            <p>管理后台</p>
-            <div class="form-group">
-              <input class="form-input" id="username" placeholder="管理员账号" />
-            </div>
-            <div class="form-group">
-              <input class="form-input" id="password" type="password" placeholder="管理员密码" />
-            </div>
-            <button class="btn btn-primary" style="width:100%;padding:12px" onclick="doLogin()">登录</button>
-            <div id="loginError">账号或密码错误</div>
-          </div>
-        </div>
-      `;
+      document.getElementById('root').innerHTML =
+        '<div class="login-page">' +
+          '<div class="login-box">' +
+            '<h1>人选天选论</h1>' +
+            '<p>管理后台</p>' +
+            '<div class="form-group">' +
+              '<input class="form-input" id="username" placeholder="管理员账号" />' +
+            '</div>' +
+            '<div class="form-group">' +
+              '<input class="form-input" id="password" type="password" placeholder="管理员密码" />' +
+            '</div>' +
+            '<button class="btn btn-primary" style="width:100%;padding:12px" data-action="login">登录</button>' +
+            '<div id="loginError">账号或密码错误</div>' +
+          '</div>' +
+        '</div>';
     }
 
     async function doLogin() {
       const u = document.getElementById('username').value;
       const p = document.getElementById('password').value;
+      if (!u || !p) {
+        document.getElementById('loginError').style.display = 'block';
+        document.getElementById('loginError').textContent = '请输入账号和密码';
+        return;
+      }
       authHeader = 'Basic ' + btoa(u + ':' + p);
 
       try {
@@ -308,9 +367,11 @@
           renderApp();
         } else {
           document.getElementById('loginError').style.display = 'block';
+          document.getElementById('loginError').textContent = '账号或密码错误';
         }
       } catch (e) {
         document.getElementById('loginError').style.display = 'block';
+        document.getElementById('loginError').textContent = '登录失败，请检查网络';
       }
     }
 
@@ -324,15 +385,20 @@
      * ===== API 请求封装 =====
      * 统一处理请求头和JSON解析
      */
-    async function apiFetch(url, options = {}) {
+    async function apiFetch(url, options) {
+      options = options || {};
       const res = await fetch(API_BASE + url, {
-        ...options,
-        headers: {
+        method: options.method || 'GET',
+        body: options.body || undefined,
+        headers: Object.assign({
           'Content-Type': 'application/json',
           'Authorization': authHeader,
-          ...(options.headers || {}),
-        },
+        }, options.headers || {}),
       });
+      if (res.status === 401) {
+        doLogout();
+        throw new Error('认证失败');
+      }
       return res.json();
     }
 
@@ -343,20 +409,23 @@
       // 销毁旧的编辑器实例，防止内存泄漏
       destroyEditor();
 
-      document.getElementById('root').innerHTML = `
-        <div class="app">
-          <div class="sidebar">
-            <div class="sidebar-title">人选天选论</div>
-            <ul class="sidebar-menu">
-              <li class="${currentPage === 'dashboard' ? 'active' : ''}" onclick="navigate('dashboard')">📊 数据看板</li>
-              <li class="${currentPage === 'articles' ? 'active' : ''}" onclick="navigate('articles')">📝 文章管理</li>
-              <li class="${currentPage === 'users' ? 'active' : ''}" onclick="navigate('users')">👥 用户管理</li>
-              <li onclick="doLogout()">🚪 退出登录</li>
-            </ul>
-          </div>
-          <div class="main" id="mainContent"></div>
-        </div>
-      `;
+      var dashboardActive = currentPage === 'dashboard' ? ' active' : '';
+      var articlesActive = currentPage === 'articles' ? ' active' : '';
+      var usersActive = currentPage === 'users' ? ' active' : '';
+
+      document.getElementById('root').innerHTML =
+        '<div class="app">' +
+          '<div class="sidebar">' +
+            '<div class="sidebar-title">人选天选论</div>' +
+            '<ul class="sidebar-menu">' +
+              '<li class="' + dashboardActive + '" data-action="navigate" data-param="dashboard">📊 数据看板</li>' +
+              '<li class="' + articlesActive + '" data-action="navigate" data-param="articles">📝 文章管理</li>' +
+              '<li class="' + usersActive + '" data-action="navigate" data-param="users">👥 用户管理</li>' +
+              '<li data-action="logout">🚪 退出登录</li>' +
+            '</ul>' +
+          '</div>' +
+          '<div class="main" id="mainContent"></div>' +
+        '</div>';
 
       switch (currentPage) {
         case 'dashboard': renderDashboard(); break;
@@ -375,75 +444,61 @@
      * 展示核心指标 + IP地域分布可视化条形图
      */
     async function renderDashboard() {
-      const main = document.getElementById('mainContent');
+      var main = document.getElementById('mainContent');
       main.innerHTML = '<div class="page-title">数据看板</div><div>加载中...</div>';
 
-      const res = await apiFetch('/api/admin/dashboard/overview');
-      if (res.code !== 0) { main.innerHTML = '<div class="empty">加载失败</div>'; return; }
+      try {
+        var res = await apiFetch('/api/admin/dashboard/overview');
+        if (res.code !== 0) { main.innerHTML = '<div class="empty">加载失败</div>'; return; }
+      } catch (e) {
+        main.innerHTML = '<div class="empty">加载失败：' + escapeHtml(e.message) + '</div>';
+        return;
+      }
 
-      const d = res.data;
-      main.innerHTML = `
-        <div class="page-title">数据看板</div>
-        <div class="stats-grid">
-          <div class="stat-card">
-            <div class="stat-label">总用户数</div>
-            <div class="stat-value">${d.totalUsers}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">今日新增</div>
-            <div class="stat-value">${d.todayNewUsers}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">日活跃</div>
-            <div class="stat-value">${d.dau}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">月活跃</div>
-            <div class="stat-value">${d.mau}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">文章总数</div>
-            <div class="stat-value">${d.totalArticles}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">道痕总数</div>
-            <div class="stat-value">${d.totalDiaries}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">今日道痕</div>
-            <div class="stat-value">${d.todayDiaries}</div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">IP 地域分布</div>
-          <div id="ipChart">加载中...</div>
-        </div>
-      `;
+      var d = res.data;
+      main.innerHTML =
+        '<div class="page-title">数据看板</div>' +
+        '<div class="stats-grid">' +
+          '<div class="stat-card"><div class="stat-label">总用户数</div><div class="stat-value">' + d.totalUsers + '</div></div>' +
+          '<div class="stat-card"><div class="stat-label">今日新增</div><div class="stat-value">' + d.todayNewUsers + '</div></div>' +
+          '<div class="stat-card"><div class="stat-label">日活跃</div><div class="stat-value">' + d.dau + '</div></div>' +
+          '<div class="stat-card"><div class="stat-label">月活跃</div><div class="stat-value">' + d.mau + '</div></div>' +
+          '<div class="stat-card"><div class="stat-label">文章总数</div><div class="stat-value">' + d.totalArticles + '</div></div>' +
+          '<div class="stat-card"><div class="stat-label">道痕总数</div><div class="stat-value">' + d.totalDiaries + '</div></div>' +
+          '<div class="stat-card"><div class="stat-label">今日道痕</div><div class="stat-value">' + d.todayDiaries + '</div></div>' +
+        '</div>' +
+        '<div class="card">' +
+          '<div class="card-title">IP 地域分布</div>' +
+          '<div id="ipChart">加载中...</div>' +
+        '</div>';
 
       // 加载IP分布数据并渲染可视化条形图
-      const ipRes = await apiFetch('/api/admin/dashboard/ip-distribution');
-      const ipEl = document.getElementById('ipChart');
-      if (ipRes.code === 0 && ipRes.data.length > 0) {
-        const maxCount = Math.max(...ipRes.data.map(i => i.count));
-        let html = '<div class="ip-bar-chart">';
-        ipRes.data.forEach(item => {
-          const pct = Math.max((item.count / maxCount) * 100, 5);
-          html += `
-            <div class="ip-bar-item">
-              <div class="ip-bar-label">${item.region || '未知'}</div>
-              <div class="ip-bar-track">
-                <div class="ip-bar-fill" style="width:${pct}%">
-                  <span class="ip-bar-count">${item.count}</span>
-                </div>
-              </div>
-            </div>
-          `;
-        });
-        html += '</div>';
-        ipEl.innerHTML = html;
-      } else {
-        ipEl.innerHTML = '<div class="empty">暂无数据</div>';
+      try {
+        var ipRes = await apiFetch('/api/admin/dashboard/ip-distribution');
+        var ipEl = document.getElementById('ipChart');
+        if (ipRes.code === 0 && ipRes.data && ipRes.data.length > 0) {
+          var maxCount = Math.max.apply(null, ipRes.data.map(function(i) { return i.count; }));
+          var html = '<div class="ip-bar-chart">';
+          ipRes.data.forEach(function(item) {
+            var pct = Math.max((item.count / maxCount) * 100, 5);
+            html +=
+              '<div class="ip-bar-item">' +
+                '<div class="ip-bar-label">' + escapeHtml(item.region || '未知') + '</div>' +
+                '<div class="ip-bar-track">' +
+                  '<div class="ip-bar-fill" style="width:' + pct + '%">' +
+                    '<span class="ip-bar-count">' + item.count + '</span>' +
+                  '</div>' +
+                '</div>' +
+              '</div>';
+          });
+          html += '</div>';
+          ipEl.innerHTML = html;
+        } else {
+          ipEl.innerHTML = '<div class="empty">暂无数据</div>';
+        }
+      } catch (e) {
+        var ipEl2 = document.getElementById('ipChart');
+        if (ipEl2) ipEl2.innerHTML = '<div class="empty">IP数据加载失败</div>';
       }
     }
 
@@ -451,157 +506,156 @@
      * ===== 文章管理 =====
      * 支持：新建/编辑/删除文章、富文本编辑器、定时发布
      */
-    let articlesList = [];
+    var articlesList = [];
 
     async function renderArticles() {
-      const main = document.getElementById('mainContent');
+      var main = document.getElementById('mainContent');
       main.innerHTML = '<div class="page-title">文章管理</div><div>加载中...</div>';
 
-      const res = await apiFetch('/api/admin/articles');
-      if (res.code !== 0) { main.innerHTML = '<div class="empty">加载失败</div>'; return; }
+      try {
+        var res = await apiFetch('/api/admin/articles');
+        if (res.code !== 0) { main.innerHTML = '<div class="empty">加载失败</div>'; return; }
+      } catch (e) {
+        main.innerHTML = '<div class="empty">加载失败</div>';
+        return;
+      }
 
       articlesList = res.data.list || [];
 
-      let tableHtml = '';
+      var tableHtml = '';
       if (articlesList.length === 0) {
         tableHtml = '<div class="empty">暂无文章，点击上方按钮创建</div>';
       } else {
-        tableHtml = `<table>
-          <tr><th>章节</th><th>标题</th><th>状态</th><th>阅读量</th><th>发布时间</th><th>操作</th></tr>
-          ${articlesList.map(a => {
-            // 状态标签：已发布/草稿/定时发布
-            let statusTag = '';
-            if (a.status === 'published') {
-              statusTag = '<span class="tag tag-published">已发布</span>';
-            } else if (a.scheduledAt && new Date(a.scheduledAt) > new Date()) {
-              statusTag = '<span class="tag tag-scheduled">定时发布</span>';
-            } else {
-              statusTag = '<span class="tag tag-draft">草稿</span>';
-            }
-            return `
-              <tr>
-                <td>第${a.chapter}章</td>
-                <td>${escapeHtml(a.title)}</td>
-                <td>${statusTag}</td>
-                <td>${a.viewCount || 0}</td>
-                <td>${a.publishedAt ? new Date(a.publishedAt).toLocaleDateString() : '-'}</td>
-                <td>
-                  <button class="btn btn-outline btn-sm" onclick="editArticle('${a.id}')">编辑</button>
-                  <button class="btn btn-danger btn-sm" onclick="deleteArticle('${a.id}')">删除</button>
-                </td>
-              </tr>
-            `;
-          }).join('')}
-        </table>`;
+        tableHtml = '<table>' +
+          '<tr><th>章节</th><th>标题</th><th>状态</th><th>阅读量</th><th>发布时间</th><th>操作</th></tr>';
+        articlesList.forEach(function(a) {
+          var statusTag = '';
+          if (a.status === 'published') {
+            statusTag = '<span class="tag tag-published">已发布</span>';
+          } else if (a.scheduledAt && new Date(a.scheduledAt) > new Date()) {
+            statusTag = '<span class="tag tag-scheduled">定时发布</span>';
+          } else {
+            statusTag = '<span class="tag tag-draft">草稿</span>';
+          }
+          tableHtml +=
+            '<tr>' +
+              '<td>第' + a.chapter + '章</td>' +
+              '<td>' + escapeHtml(a.title) + '</td>' +
+              '<td>' + statusTag + '</td>' +
+              '<td>' + (a.viewCount || 0) + '</td>' +
+              '<td>' + (a.publishedAt ? new Date(a.publishedAt).toLocaleDateString() : '-') + '</td>' +
+              '<td>' +
+                '<button class="btn btn-outline btn-sm" data-action="edit-article" data-param="' + a.id + '">编辑</button> ' +
+                '<button class="btn btn-danger btn-sm" data-action="delete-article" data-param="' + a.id + '">删除</button>' +
+              '</td>' +
+            '</tr>';
+        });
+        tableHtml += '</table>';
       }
 
-      main.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px">
-          <div class="page-title" style="margin-bottom:0">文章管理</div>
-          <button class="btn btn-primary" onclick="showArticleModal()">+ 新建文章</button>
-        </div>
-        <div class="card">${tableHtml}</div>
-      `;
+      main.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px">' +
+          '<div class="page-title" style="margin-bottom:0">文章管理</div>' +
+          '<button class="btn btn-primary" data-action="new-article">+ 新建文章</button>' +
+        '</div>' +
+        '<div class="card">' + tableHtml + '</div>';
     }
 
     /**
      * 显示文章编辑弹窗
      * 集成 WangEditor 富文本编辑器
-     * @param {Object|null} article - 编辑时传入文章对象，新建时为null
      */
-    function showArticleModal(article = null) {
+    function showArticleModal(article) {
+      article = article || null;
       // 先销毁旧编辑器
       destroyEditor();
 
-      const isEdit = !!article;
-      const overlay = document.createElement('div');
+      var isEdit = !!article;
+      var overlay = document.createElement('div');
       overlay.className = 'modal-overlay';
       overlay.id = 'articleModal';
-      overlay.innerHTML = `
-        <div class="modal">
-          <div class="modal-title">${isEdit ? '编辑文章' : '新建文章'}</div>
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">章节号</label>
-              <input class="form-input" id="artChapter" type="number" value="${article?.chapter || ''}" placeholder="如：1" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">状态</label>
-              <select class="form-select" id="artStatus" onchange="toggleSchedule()">
-                <option value="published" ${article?.status === 'published' ? 'selected' : ''}>立即发布</option>
-                <option value="draft" ${article?.status === 'draft' ? 'selected' : ''}>草稿</option>
-                <option value="scheduled">定时发布</option>
-              </select>
-            </div>
-          </div>
-          <div class="form-group" id="scheduleGroup" style="display:none">
-            <label class="form-label">定时发布时间</label>
-            <input class="form-input" id="artScheduledAt" type="datetime-local" value="" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">标题</label>
-            <input class="form-input" id="artTitle" value="${escapeHtml(article?.title || '')}" placeholder="文章标题" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">摘要</label>
-            <input class="form-input" id="artSummary" value="${escapeHtml(article?.summary || '')}" placeholder="一句话摘要" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">金句（每行一句）</label>
-            <textarea class="form-textarea" id="artQuotes" style="min-height:80px" placeholder="每行一句金句">${(article?.quotes || []).join('\n')}</textarea>
-          </div>
-          <div class="form-group">
-            <label class="form-label">正文内容</label>
-            <div class="editor-container">
-              <div id="editorToolbar"></div>
-              <div id="editorContent" style="min-height:300px"></div>
-            </div>
-          </div>
-          <div class="modal-actions">
-            <button class="btn btn-outline" onclick="closeArticleModal()">取消</button>
-            <button class="btn btn-primary" onclick="saveArticle('${article?.id || ''}')">${isEdit ? '保存' : '创建'}</button>
-          </div>
-        </div>
-      `;
+      overlay.innerHTML =
+        '<div class="modal">' +
+          '<div class="modal-title">' + (isEdit ? '编辑文章' : '新建文章') + '</div>' +
+          '<div class="form-row">' +
+            '<div class="form-group">' +
+              '<label class="form-label">章节号</label>' +
+              '<input class="form-input" id="artChapter" type="number" value="' + (article ? article.chapter : '') + '" placeholder="如：1" />' +
+            '</div>' +
+            '<div class="form-group">' +
+              '<label class="form-label">状态</label>' +
+              '<select class="form-select" id="artStatus" data-change="toggle-schedule">' +
+                '<option value="published"' + (article && article.status === 'published' ? ' selected' : '') + '>立即发布</option>' +
+                '<option value="draft"' + (article && article.status === 'draft' ? ' selected' : '') + '>草稿</option>' +
+                '<option value="scheduled">定时发布</option>' +
+              '</select>' +
+            '</div>' +
+          '</div>' +
+          '<div class="form-group" id="scheduleGroup" style="display:none">' +
+            '<label class="form-label">定时发布时间</label>' +
+            '<input class="form-input" id="artScheduledAt" type="datetime-local" value="" />' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label class="form-label">标题</label>' +
+            '<input class="form-input" id="artTitle" value="' + escapeHtml(article ? article.title : '') + '" placeholder="文章标题" />' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label class="form-label">摘要</label>' +
+            '<input class="form-input" id="artSummary" value="' + escapeHtml(article ? article.summary : '') + '" placeholder="一句话摘要" />' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label class="form-label">金句（每行一句）</label>' +
+            '<textarea class="form-textarea" id="artQuotes" style="min-height:80px" placeholder="每行一句金句">' + (article && article.quotes ? article.quotes.join('\n') : '') + '</textarea>' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label class="form-label">正文内容</label>' +
+            '<div class="editor-container">' +
+              '<div id="editorToolbar"></div>' +
+              '<div id="editorContent" style="min-height:300px"></div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="modal-actions">' +
+            '<button class="btn btn-outline" data-action="close-modal">取消</button>' +
+            '<button class="btn btn-primary" data-action="save-article" data-param="' + (article ? article.id : '') + '">' + (isEdit ? '保存' : '创建') + '</button>' +
+          '</div>' +
+        '</div>';
       document.body.appendChild(overlay);
 
       // 初始化 WangEditor 富文本编辑器
-      initEditor(article?.content || '');
+      initEditor(article ? (article.content || '') : '');
     }
 
     /**
      * 初始化 WangEditor 5.x 富文本编辑器
-     * @param {string} initialContent - 初始HTML内容
      */
     function initEditor(initialContent) {
-      const E = window.wangEditor;
+      var E = window.wangEditor;
       if (!E) {
         // WangEditor CDN加载失败，降级为textarea
         console.warn('WangEditor未加载，降级为textarea');
-        const container = document.querySelector('.editor-container');
+        var container = document.querySelector('.editor-container');
         if (container) {
-          container.innerHTML = `<textarea class="form-textarea" id="editorFallback" style="min-height:300px">${initialContent}</textarea>`;
+          container.innerHTML = '<textarea class="form-textarea" id="editorFallback" style="min-height:300px">' + escapeHtml(initialContent) + '</textarea>';
         }
         return;
       }
 
       // 创建编辑器和工具栏
-      const editorConfig = {
+      var editorConfig = {
         placeholder: '请输入文章正文...',
-        onChange(editor) {
-          // 编辑器内容变化时的回调（可用于自动保存等）
+        onChange: function(editor) {
+          // 编辑器内容变化时的回调
         },
       };
 
-      const toolbarConfig = {
-        // 精简工具栏，只保留常用功能
+      var toolbarConfig = {
         excludeKeys: [
           'group-video', 'insertVideo', 'uploadVideo',
           'insertTable', 'codeBlock', 'todo',
         ],
       };
 
-      const editor = E.createEditor({
+      var editor = E.createEditor({
         selector: '#editorContent',
         html: initialContent,
         config: editorConfig,
@@ -609,7 +663,7 @@
       });
 
       E.createToolbar({
-        editor,
+        editor: editor,
         selector: '#editorToolbar',
         config: toolbarConfig,
         mode: 'default',
@@ -630,13 +684,12 @@
 
     /**
      * 获取编辑器内容
-     * 优先从WangEditor获取，降级从textarea获取
      */
     function getEditorContent() {
       if (editorInstance) {
         return editorInstance.getHtml();
       }
-      const fallback = document.getElementById('editorFallback');
+      var fallback = document.getElementById('editorFallback');
       return fallback ? fallback.value : '';
     }
 
@@ -644,8 +697,8 @@
      * 切换定时发布时间输入框的显示/隐藏
      */
     function toggleSchedule() {
-      const status = document.getElementById('artStatus').value;
-      const group = document.getElementById('scheduleGroup');
+      var status = document.getElementById('artStatus').value;
+      var group = document.getElementById('scheduleGroup');
       if (group) {
         group.style.display = status === 'scheduled' ? 'block' : 'none';
       }
@@ -653,28 +706,27 @@
 
     function closeArticleModal() {
       destroyEditor();
-      const modal = document.getElementById('articleModal');
+      var modal = document.getElementById('articleModal');
       if (modal) modal.remove();
     }
 
     /**
      * 保存文章（新建或编辑）
-     * @param {string} id - 文章ID，空字符串表示新建
      */
     async function saveArticle(id) {
-      const status = document.getElementById('artStatus').value;
-      const data = {
+      var status = document.getElementById('artStatus').value;
+      var data = {
         chapter: parseInt(document.getElementById('artChapter').value),
         title: document.getElementById('artTitle').value,
         summary: document.getElementById('artSummary').value,
         content: getEditorContent(),
-        quotes: document.getElementById('artQuotes').value.split('\n').filter(q => q.trim()),
+        quotes: document.getElementById('artQuotes').value.split('\n').filter(function(q) { return q.trim(); }),
         status: status === 'scheduled' ? 'draft' : status,
       };
 
-      // 定时发布：将scheduledAt传给后端
+      // 定时发布
       if (status === 'scheduled') {
-        const scheduledAt = document.getElementById('artScheduledAt').value;
+        var scheduledAt = document.getElementById('artScheduledAt').value;
         if (!scheduledAt) {
           alert('请选择定时发布时间');
           return;
@@ -687,11 +739,16 @@
         return;
       }
 
-      let res;
-      if (id) {
-        res = await apiFetch(`/api/admin/articles/${id}`, { method: 'PUT', body: JSON.stringify(data) });
-      } else {
-        res = await apiFetch('/api/admin/articles', { method: 'POST', body: JSON.stringify(data) });
+      var res;
+      try {
+        if (id) {
+          res = await apiFetch('/api/admin/articles/' + id, { method: 'PUT', body: JSON.stringify(data) });
+        } else {
+          res = await apiFetch('/api/admin/articles', { method: 'POST', body: JSON.stringify(data) });
+        }
+      } catch (e) {
+        alert('操作失败：' + e.message);
+        return;
       }
 
       if (res.code === 0) {
@@ -703,12 +760,11 @@
     }
 
     /**
-     * 编辑文章 - 从列表数据中获取文章详情
+     * 编辑文章
      */
     async function editArticle(id) {
-      const article = articlesList.find(a => a.id === id);
+      var article = articlesList.find(function(a) { return a.id === id; });
       if (article) {
-        // 如果quotes是字符串（JSON），解析为数组
         if (typeof article.quotes === 'string') {
           try { article.quotes = JSON.parse(article.quotes); } catch (e) { article.quotes = []; }
         }
@@ -717,55 +773,63 @@
     }
 
     /**
-     * 删除文章 - 需二次确认
+     * 删除文章
      */
     async function deleteArticle(id) {
       if (!confirm('确定要删除这篇文章吗？此操作不可恢复。')) return;
-      const res = await apiFetch(`/api/admin/articles/${id}`, { method: 'DELETE' });
-      if (res.code === 0) {
-        renderArticles();
-      } else {
-        alert(res.message || '删除失败');
+      try {
+        var res = await apiFetch('/api/admin/articles/' + id, { method: 'DELETE' });
+        if (res.code === 0) {
+          renderArticles();
+        } else {
+          alert(res.message || '删除失败');
+        }
+      } catch (e) {
+        alert('删除失败：' + e.message);
       }
     }
 
     /**
      * ===== 用户管理 =====
-     * 展示用户列表，手机号中间四位脱敏处理
      */
     async function renderUsers() {
-      const main = document.getElementById('mainContent');
+      var main = document.getElementById('mainContent');
       main.innerHTML = '<div class="page-title">用户管理</div><div>加载中...</div>';
 
-      const res = await apiFetch('/api/admin/users');
-      if (res.code !== 0) { main.innerHTML = '<div class="empty">加载失败</div>'; return; }
+      try {
+        var res = await apiFetch('/api/admin/users');
+        if (res.code !== 0) { main.innerHTML = '<div class="empty">加载失败</div>'; return; }
+      } catch (e) {
+        main.innerHTML = '<div class="empty">加载失败</div>';
+        return;
+      }
 
-      const users = res.data.list || [];
+      var users = res.data.list || [];
 
-      let tableHtml = '';
+      var tableHtml = '';
       if (users.length === 0) {
         tableHtml = '<div class="empty">暂无用户</div>';
       } else {
-        tableHtml = `<table>
-          <tr><th>昵称</th><th>手机号</th><th>连续天数</th><th>日记数</th><th>IP地区</th><th>注册时间</th><th>最后活跃</th></tr>
-          ${users.map(u => `
-            <tr>
-              <td>${escapeHtml(u.nickname)}</td>
-              <td>${maskPhone(u.phone)}</td>
-              <td>${u.streakDays || 0}天</td>
-              <td>${u._count?.diaries || u.diaryCount || 0}篇</td>
-              <td>${u.lastIpRegion || '未知'}</td>
-              <td>${new Date(u.createdAt).toLocaleDateString()}</td>
-              <td>${new Date(u.lastLoginAt || u.createdAt).toLocaleDateString()}</td>
-            </tr>
-          `).join('')}
-        </table>`;
+        tableHtml = '<table>' +
+          '<tr><th>昵称</th><th>手机号</th><th>连续天数</th><th>日记数</th><th>IP地区</th><th>注册时间</th><th>最后活跃</th></tr>';
+        users.forEach(function(u) {
+          tableHtml +=
+            '<tr>' +
+              '<td>' + escapeHtml(u.nickname) + '</td>' +
+              '<td>' + maskPhone(u.phone) + '</td>' +
+              '<td>' + (u.streakDays || 0) + '天</td>' +
+              '<td>' + (u._count && u._count.diaries ? u._count.diaries : (u.diaryCount || 0)) + '篇</td>' +
+              '<td>' + escapeHtml(u.lastIpRegion || '未知') + '</td>' +
+              '<td>' + new Date(u.createdAt).toLocaleDateString() + '</td>' +
+              '<td>' + new Date(u.lastLoginAt || u.createdAt).toLocaleDateString() + '</td>' +
+            '</tr>';
+        });
+        tableHtml += '</table>';
       }
 
-      main.innerHTML = `
-        <div class="page-title">用户管理</div>
-        <div class="card">${tableHtml}</div>
-      `;
+      main.innerHTML =
+        '<div class="page-title">用户管理</div>' +
+        '<div class="card">' + tableHtml + '</div>';
     }
 
     /**
@@ -774,8 +838,6 @@
 
     /**
      * 手机号脱敏：138****1234
-     * @param {string} phone - 原始手机号
-     * @returns {string} 脱敏后的手机号
      */
     function maskPhone(phone) {
       if (!phone || phone.length < 7) return phone || '';
@@ -784,12 +846,10 @@
 
     /**
      * HTML转义，防止XSS
-     * @param {string} str - 原始字符串
-     * @returns {string} 转义后的安全字符串
      */
     function escapeHtml(str) {
       if (!str) return '';
-      const div = document.createElement('div');
+      var div = document.createElement('div');
       div.textContent = str;
       return div.innerHTML;
     }

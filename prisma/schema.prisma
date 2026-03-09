@@ -1,26 +1,24 @@
-/**
- * ===================================================================
- * Prisma数据库Schema - 人选天选论
- * ===================================================================
- *
- * 数据库设计原则：
- * 1. 隐私优先：日记内容端到端加密，服务器只存密文
- * 2. 性能优先：关键查询路径都有索引覆盖
- * 3. 数据完整性：级联删除确保用户注销时数据完全清理
- *
- * 环境切换：
- * - 开发环境：SQLite（零配置，本文件）
- * - 生产环境：MySQL（使用 prisma/schema.mysql.prisma）
- *
- * 索引策略：
- * - 所有外键字段都有索引（userId）
- * - 高频查询字段有索引（diaryDate, checkinDate, status, chapter）
- * - 联合唯一索引兼做查询索引（userId+diaryDate, userId+checkinDate）
- *
- * 迁移命令：
- * - 开发环境：npx prisma db push（直接同步schema到数据库）
- * - 生产环境：npx prisma migrate dev（生成迁移文件，可回滚）
- */
+// ===================================================================
+// Prisma数据库Schema - 人选天选论
+// ===================================================================
+//
+// 数据库设计原则：
+// 1. 隐私优先：日记内容端到端加密，服务器只存密文
+// 2. 性能优先：关键查询路径都有索引覆盖
+// 3. 数据完整性：级联删除确保用户注销时数据完全清理
+//
+// 环境切换：
+// - 开发环境：SQLite（零配置，本文件）
+// - 生产环境：MySQL（使用 prisma/schema.mysql.prisma）
+//
+// 索引策略：
+// - 所有外键字段都有索引（userId）
+// - 高频查询字段有索引（diaryDate, checkinDate, status, chapter）
+// - 联合唯一索引兼做查询索引（userId+diaryDate, userId+checkinDate）
+//
+// 迁移命令：
+// - 开发环境：npx prisma db push（直接同步schema到数据库）
+// - 生产环境：npx prisma migrate dev（生成迁移文件，可回滚）
 
 generator client {
   provider = "prisma-client-js"
