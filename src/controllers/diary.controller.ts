@@ -187,9 +187,10 @@ async function updateCheckinInTransaction(tx: any, userId: string, diaryDate: st
  *
  * GET /api/diaries
  * Headers: Authorization: Bearer <token>
- * Query: { page?: number, pageSize?: number, month?: string }
+ * Query: { page?: number, pageSize?: number, month?: string, date?: string }
  *
  * [性能优化] pageSize增加上限100，防止恶意请求大量数据
+ * [BUG FIX] 新增date参数支持，前端用于检查某天是否已写日记
  */
 export async function getDiaries(req: Request, res: Response): Promise<void> {
   try {
@@ -197,12 +198,18 @@ export async function getDiaries(req: Request, res: Response): Promise<void> {
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const pageSize = Math.min(Math.max(1, parseInt(req.query.pageSize as string) || 30), 100);
     const month = req.query.month as string;
+    const date = req.query.date as string;
     const skip = (page - 1) * pageSize;
 
     const where: any = { userId };
 
+    // 按精确日期筛选（优先级高于月份）
+    // 前端用于检查今天是否已写日记：GET /api/diaries?date=2024-01-15
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      where.diaryDate = date;
+    }
     // 按月份筛选：利用diaryDate字符串的前缀匹配
-    if (month && /^\d{4}-\d{2}$/.test(month)) {
+    else if (month && /^\d{4}-\d{2}$/.test(month)) {
       where.diaryDate = {
         startsWith: month,
       };
