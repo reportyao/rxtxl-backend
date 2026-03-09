@@ -189,7 +189,9 @@ async function sendAliyunSms(phone: string, code: string): Promise<void> {
 
   try {
     // 动态导入阿里云SDK（避免未安装时启动报错）
-    const Dysmsapi20170525 = (await import('@alicloud/dysmsapi20170525')).default;
+    const DysmsapiModule = await import('@alicloud/dysmsapi20170525');
+    const Dysmsapi20170525 = DysmsapiModule.default;
+    const SendSmsRequest = DysmsapiModule.SendSmsRequest;
     const OpenApi = await import('@alicloud/openapi-client');
 
     const smsConfig = new OpenApi.Config({
@@ -200,7 +202,7 @@ async function sendAliyunSms(phone: string, code: string): Promise<void> {
 
     const client = new Dysmsapi20170525(smsConfig);
 
-    const sendReq = new Dysmsapi20170525.SendSmsRequest({
+    const sendReq = new SendSmsRequest({
       phoneNumbers: phone,
       signName: config.aliyun.smsSignName,
       templateCode: config.aliyun.smsTemplateCode,
