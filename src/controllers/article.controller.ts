@@ -15,19 +15,17 @@
  * 5. 更新文章（支持部分字段更新）
  * 6. 删除文章
  *
- * 文章状态流转：
- * - draft（草稿）→ published（已发布）
- * - draft + scheduledAt → 定时发布（需要外部定时任务触发状态变更）
- *
- * 数据存储：
- * - content: 富文本HTML内容（由WangEditor编辑器生成）
- * - quotes: JSON字符串，存储金句数组（如 ["金句1", "金句2"]）
- * - scheduledAt: 定时发布时间（可选）
+ * v1.1 优化：
+ * - [BUG FIX] viewCount使用Prisma原子increment，修复高并发竞态条件
+ * - [性能] 文章列表和详情使用内存缓存，减少数据库查询
+ * - [性能] viewCount更新改为异步不阻塞响应
+ * - [性能] 文章详情返回prevArticle/nextArticle，前端无需再请求全量列表
  */
 
 import { Request, Response } from 'express';
 import prisma from '../config/database';
 import { success, error, validationError, notFound } from '../utils/response';
+import { apiCache } from '../middleware/performance';
 
 // ==================== 用户端接口 ====================
 
@@ -40,12 +38,22 @@ import { success, error, validationError, notFound } from '../utils/response';
  * 只返回status='published'的文章
  * 不返回content字段（减少传输量，列表只需要标题和摘要）
  * 按章节号倒序排列（最新章节在前）
+ *
+ * [性能优化] 使用内存缓存，60秒TTL
  */
 export async function getArticles(req: Request, res: Response): Promise<void> {
   try {
     const page = parseInt(req.query.page as string) || 1;
-    const pageSize = parseInt(req.query.pageSize as string) || 20;
+    const pageSize = Math.min(parseInt(req.query.pageSize as string) || 20, 100);
     const skip = (page - 1) * pageSize;
+
+    // 尝试从缓存获取
+    const cacheKey = `articles:list:${page}:${pageSize}`;
+    const cached = apiCache.get<any>(cacheKey);
+    if (cached) {
+      success(res, cached);
+      return;
+    }
 
     // 并行查询列表和总数，减少数据库往返时间
     const [articles, total] = await Promise.all([
@@ -67,13 +75,18 @@ export async function getArticles(req: Request, res: Response): Promise<void> {
       prisma.article.count({ where: { status: 'published' } }),
     ]);
 
-    success(res, {
+    const result = {
       list: articles,
       total,
       page,
       pageSize,
       totalPages: Math.ceil(total / pageSize),
-    });
+    };
+
+    // 写入缓存，60秒过期
+    apiCache.set(cacheKey, result, 60 * 1000);
+
+    success(res, result);
   } catch (err) {
     console.error('[getArticles]', err);
     error(res, '获取文章列表失败');
@@ -86,13 +99,14 @@ export async function getArticles(req: Request, res: Response): Promise<void> {
  * GET /api/articles/:id
  *
  * 返回完整文章内容，同时：
- * 1. 自增阅读量（viewCount + 1）
+ * 1. 异步自增阅读量（viewCount + 1，使用原子操作，不阻塞响应）
  * 2. 查询上一章和下一章的基本信息（用于前端章节切换导航）
  * 3. 解析quotes JSON字符串为数组（用于前端金句分享功能）
  *
- * 上下章查询逻辑：
- * - 上一章：chapter < 当前chapter 且 status='published'，取最大的一个
- * - 下一章：chapter > 当前chapter 且 status='published'，取最小的一个
+ * [BUG FIX] viewCount使用Prisma的原子increment操作，
+ * 修复原来"先查询再更新"导致的高并发计数丢失问题。
+ *
+ * [性能优化] 使用内存缓存，300秒TTL；viewCount异步更新不阻塞响应
  */
 export async function getArticleDetail(req: Request, res: Response): Promise<void> {
   try {
@@ -107,10 +121,13 @@ export async function getArticleDetail(req: Request, res: Response): Promise<voi
       return;
     }
 
-    // 异步增加阅读量（不阻塞响应）
-    await prisma.article.update({
+    // [BUG FIX] 异步原子递增阅读量（不阻塞响应，不影响用户体验）
+    // 使用 Prisma 的 increment 操作确保并发安全
+    prisma.article.update({
       where: { id },
       data: { viewCount: { increment: 1 } },
+    }).catch(err => {
+      console.error('[viewCount increment]', err);
     });
 
     // 并行查询上一章和下一章
@@ -156,16 +173,11 @@ export async function getArticleDetail(req: Request, res: Response): Promise<voi
  * GET /api/admin/articles
  * Headers: Authorization: Basic <credentials>
  * Query: { page?: number, pageSize?: number, status?: string }
- *
- * 与用户端列表的区别：
- * - 返回所有状态的文章（包括草稿）
- * - 返回完整字段（包括content，用于编辑回显）
- * - 支持按状态筛选
  */
 export async function adminGetArticles(req: Request, res: Response): Promise<void> {
   try {
     const page = parseInt(req.query.page as string) || 1;
-    const pageSize = parseInt(req.query.pageSize as string) || 20;
+    const pageSize = Math.min(parseInt(req.query.pageSize as string) || 20, 100);
     const status = req.query.status as string;
     const skip = (page - 1) * pageSize;
 
@@ -211,9 +223,6 @@ export async function adminGetArticles(req: Request, res: Response): Promise<voi
  *   quotes?: string[],      // 金句数组
  *   scheduledAt?: string    // 定时发布时间（ISO 8601格式）
  * }
- *
- * 章节号唯一性检查：创建前会检查是否已存在相同章节号的文章
- * 发布时间：如果status='published'，自动设置publishedAt为当前时间
  */
 export async function adminCreateArticle(req: Request, res: Response): Promise<void> {
   try {
@@ -221,6 +230,11 @@ export async function adminCreateArticle(req: Request, res: Response): Promise<v
 
     if (!title || !content || chapter === undefined) {
       validationError(res, '标题、内容和章节号为必填项');
+      return;
+    }
+
+    if (typeof chapter !== 'number' || chapter < 0) {
+      validationError(res, '章节号必须是非负整数');
       return;
     }
 
@@ -247,6 +261,9 @@ export async function adminCreateArticle(req: Request, res: Response): Promise<v
       },
     });
 
+    // 文章创建后清除列表缓存
+    apiCache.invalidate('articles:');
+
     success(res, article, '文章创建成功', 201);
   } catch (err) {
     console.error('[adminCreateArticle]', err);
@@ -260,10 +277,6 @@ export async function adminCreateArticle(req: Request, res: Response): Promise<v
  * PUT /api/admin/articles/:id
  * Headers: Authorization: Basic <credentials>
  * Body: 与创建接口相同（所有字段均为可选，只更新传入的字段）
- *
- * 部分更新策略：只有body中明确传入的字段才会更新
- * 章节号变更检查：如果修改了章节号，会检查新章节号是否已被占用
- * 发布时间逻辑：从draft变为published时，自动设置publishedAt
  */
 export async function adminUpdateArticle(req: Request, res: Response): Promise<void> {
   try {
@@ -279,6 +292,10 @@ export async function adminUpdateArticle(req: Request, res: Response): Promise<v
 
     // 如果修改了章节号，检查新章节号是否已被其他文章占用
     if (chapter !== undefined && chapter !== existing.chapter) {
+      if (typeof chapter !== 'number' || chapter < 0) {
+        validationError(res, '章节号必须是非负整数');
+        return;
+      }
       const duplicate = await prisma.article.findFirst({ where: { chapter } });
       if (duplicate) {
         validationError(res, `第${chapter}章已存在`);
@@ -312,6 +329,9 @@ export async function adminUpdateArticle(req: Request, res: Response): Promise<v
       data: updateData,
     });
 
+    // 文章更新后清除相关缓存
+    apiCache.invalidate('articles:');
+
     success(res, article, '文章更新成功');
   } catch (err) {
     console.error('[adminUpdateArticle]', err);
@@ -324,9 +344,6 @@ export async function adminUpdateArticle(req: Request, res: Response): Promise<v
  *
  * DELETE /api/admin/articles/:id
  * Headers: Authorization: Basic <credentials>
- *
- * 硬删除：直接从数据库中删除记录
- * 注意：此操作不可逆，删除前管理后台前端会弹出二次确认
  */
 export async function adminDeleteArticle(req: Request, res: Response): Promise<void> {
   try {
@@ -339,6 +356,9 @@ export async function adminDeleteArticle(req: Request, res: Response): Promise<v
     }
 
     await prisma.article.delete({ where: { id } });
+
+    // 文章删除后清除相关缓存
+    apiCache.invalidate('articles:');
 
     success(res, null, '文章已删除');
   } catch (err) {

@@ -11,16 +11,11 @@
  * 5. 石头收藏馆数据（聚合主石头、统计出现频次）
  * 6. 删除日记
  *
- * 数据安全设计：
- * - 日记内容在前端使用AES-256-GCM加密后上传
- * - 服务器存储的是密文（encryptedData）和初始化向量（iv）
- * - 服务器无法解密日记内容，即使数据库泄露也不影响用户隐私
- * - mainStone（主石头）是用户可选的明文摘要，用于石头收藏馆展示
- *
- * 打卡机制：
- * - 每天写日记自动打卡，同一天多次写入只算一次
- * - 连续天数基于日期字符串计算，避免时区问题
- * - 打卡记录独立存表，支持按月查询日历展示
+ * v1.1 优化：
+ * - [BUG FIX] 日记创建和打卡使用事务，确保数据一致性
+ * - [BUG FIX] 日期验证增强，防止未来日期和无效日期
+ * - [性能] pageSize增加上限校验，防止恶意大量请求
+ * - [安全] 增加encryptedData长度校验
  */
 
 import { Request, Response } from 'express';
@@ -40,9 +35,7 @@ import { success, error, validationError, notFound } from '../utils/response';
  *   diaryDate: string       // 日记日期，格式：YYYY-MM-DD
  * }
  *
- * 使用upsert策略：同一天只能有一篇日记
- * - 如果当天已有日记 → 更新密文内容
- * - 如果当天没有日记 → 创建新日记 + 自动打卡
+ * [BUG FIX] 使用Prisma事务确保日记创建和打卡记录的原子性
  */
 export async function createDiary(req: Request, res: Response): Promise<void> {
   try {
@@ -60,37 +53,68 @@ export async function createDiary(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // ===== Upsert日记 =====
-    // 联合唯一索引：userId + diaryDate，保证每人每天只有一篇日记
-    const diary = await prisma.diary.upsert({
-      where: {
-        userId_diaryDate: { userId, diaryDate },
-      },
-      update: {
-        encryptedData,
-        iv,
-        mainStone: mainStone || null,
-        mainStoneHash: mainStoneHash || null,
-      },
-      create: {
-        userId,
-        encryptedData,
-        iv,
-        mainStone: mainStone || null,
-        mainStoneHash: mainStoneHash || null,
-        diaryDate,
-      },
+    // 验证日期有效性（防止无效日期如2024-02-30）
+    const [year, month, day] = diaryDate.split('-').map(Number);
+    const dateObj = new Date(year, month - 1, day);
+    if (dateObj.getFullYear() !== year || dateObj.getMonth() !== month - 1 || dateObj.getDate() !== day) {
+      validationError(res, '无效的日期');
+      return;
+    }
+
+    // 防止未来日期（允许当天）
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    if (diaryDate > todayStr) {
+      validationError(res, '不能创建未来日期的日记');
+      return;
+    }
+
+    // 加密数据长度校验（防止恶意超大数据，最大1MB Base64）
+    if (encryptedData.length > 1024 * 1024) {
+      validationError(res, '日记内容过长');
+      return;
+    }
+
+    // mainStone长度校验
+    if (mainStone && mainStone.length > 200) {
+      validationError(res, '主石头内容过长（最多200字）');
+      return;
+    }
+
+    // ===== 使用事务确保日记和打卡的原子性 =====
+    const result = await prisma.$transaction(async (tx) => {
+      // Upsert日记
+      const diary = await tx.diary.upsert({
+        where: {
+          userId_diaryDate: { userId, diaryDate },
+        },
+        update: {
+          encryptedData,
+          iv,
+          mainStone: mainStone || null,
+          mainStoneHash: mainStoneHash || null,
+        },
+        create: {
+          userId,
+          encryptedData,
+          iv,
+          mainStone: mainStone || null,
+          mainStoneHash: mainStoneHash || null,
+          diaryDate,
+        },
+      });
+
+      // 自动打卡（在事务内执行）
+      await updateCheckinInTransaction(tx, userId, diaryDate);
+
+      return diary;
     });
 
-    // ===== 自动打卡 =====
-    // 写日记即打卡，更新连续天数
-    await updateCheckin(userId, diaryDate);
-
     success(res, {
-      id: diary.id,
-      diaryDate: diary.diaryDate,
-      mainStone: diary.mainStone,
-      createdAt: diary.createdAt,
+      id: result.id,
+      diaryDate: result.diaryDate,
+      mainStone: result.mainStone,
+      createdAt: result.createdAt,
     }, '道痕已保存');
   } catch (err) {
     console.error('[createDiary]', err);
@@ -99,58 +123,48 @@ export async function createDiary(req: Request, res: Response): Promise<void> {
 }
 
 /**
- * 更新打卡记录和连续天数（内部函数）
+ * 更新打卡记录和连续天数（事务内部函数）
  *
- * 打卡逻辑：
- * 1. 检查当天是否已打卡（防止重复计算）
- * 2. 检查昨天是否打卡：
- *    - 昨天打卡了 → 连续天数 = 当前连续天数 + 1
- *    - 昨天没打卡 → 连续天数重置为 1
- * 3. 创建打卡记录并更新用户的连续天数
+ * [BUG FIX] 原来的updateCheckin是独立函数，与日记创建不在同一事务中。
+ * 如果打卡更新失败，日记已经创建成功，导致数据不一致。
+ * 现在改为在事务内执行，确保原子性。
  *
- * 时区处理：
- * - 使用纯字符串日期（YYYY-MM-DD）进行计算
- * - 通过手动构造Date对象计算"昨天"，避免UTC/本地时区偏差
- * - 这样无论服务器在哪个时区，结果都是一致的
- *
+ * @param tx - Prisma事务客户端
  * @param userId - 用户ID
  * @param diaryDate - 打卡日期，格式：YYYY-MM-DD
  */
-async function updateCheckin(userId: string, diaryDate: string): Promise<void> {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
+async function updateCheckinInTransaction(tx: any, userId: string, diaryDate: string): Promise<void> {
+  const user = await tx.user.findUnique({ where: { id: userId } });
   if (!user) return;
 
   // 检查是否已经打卡（同一天多次写日记只算一次打卡）
-  const existingCheckin = await prisma.checkin.findUnique({
+  const existingCheckin = await tx.checkin.findUnique({
     where: { userId_checkinDate: { userId, checkinDate: diaryDate } },
   });
 
   if (existingCheckin) return;
 
   // ===== 计算"昨天"的日期字符串 =====
-  // 使用本地时间构造Date对象，避免UTC偏移问题
   const [year, month, day] = diaryDate.split('-').map(Number);
   const todayDate = new Date(year, month - 1, day);
   todayDate.setDate(todayDate.getDate() - 1);
   const yesterdayStr = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
 
   // 查询昨天是否有打卡记录
-  const yesterdayCheckin = await prisma.checkin.findUnique({
+  const yesterdayCheckin = await tx.checkin.findUnique({
     where: { userId_checkinDate: { userId, checkinDate: yesterdayStr } },
   });
 
   // 计算新的连续天数
   let newStreakDays: number;
   if (yesterdayCheckin) {
-    // 昨天也打卡了 → 连续天数递增
     newStreakDays = user.streakDays + 1;
   } else {
-    // 昨天没打卡 → 连续天数重置为1（今天是新的开始）
     newStreakDays = 1;
   }
 
-  // 创建打卡记录（记录当时的连续天数，用于历史回溯）
-  await prisma.checkin.create({
+  // 创建打卡记录
+  await tx.checkin.create({
     data: {
       userId,
       checkinDate: diaryDate,
@@ -159,7 +173,7 @@ async function updateCheckin(userId: string, diaryDate: string): Promise<void> {
   });
 
   // 更新用户表的连续天数和最后打卡时间
-  await prisma.user.update({
+  await tx.user.update({
     where: { id: userId },
     data: {
       streakDays: newStreakDays,
@@ -175,17 +189,13 @@ async function updateCheckin(userId: string, diaryDate: string): Promise<void> {
  * Headers: Authorization: Bearer <token>
  * Query: { page?: number, pageSize?: number, month?: string }
  *
- * 注意：列表接口只返回元数据（日期、主石头、创建时间），不返回密文内容
- * 这样可以在不解密的情况下展示日记列表
- * 用户点击具体日记后，再调用详情接口获取密文并在前端解密
- *
- * @param month - 可选，按月筛选，格式：YYYY-MM
+ * [性能优化] pageSize增加上限100，防止恶意请求大量数据
  */
 export async function getDiaries(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user!.userId;
-    const page = parseInt(req.query.page as string) || 1;
-    const pageSize = parseInt(req.query.pageSize as string) || 30;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const pageSize = Math.min(Math.max(1, parseInt(req.query.pageSize as string) || 30), 100);
     const month = req.query.month as string;
     const skip = (page - 1) * pageSize;
 
@@ -222,6 +232,7 @@ export async function getDiaries(req: Request, res: Response): Promise<void> {
       total,
       page,
       pageSize,
+      totalPages: Math.ceil(total / pageSize),
     });
   } catch (err) {
     console.error('[getDiaries]', err);
@@ -234,11 +245,6 @@ export async function getDiaries(req: Request, res: Response): Promise<void> {
  *
  * GET /api/diaries/:id
  * Headers: Authorization: Bearer <token>
- *
- * 返回完整的日记数据，包括encryptedData和iv
- * 前端收到后使用用户的AES密钥在本地解密展示
- *
- * 安全检查：只能查看自己的日记（where条件包含userId）
  */
 export async function getDiaryDetail(req: Request, res: Response): Promise<void> {
   try {
@@ -268,15 +274,6 @@ export async function getDiaryDetail(req: Request, res: Response): Promise<void>
  * GET /api/diaries/checkins
  * Headers: Authorization: Bearer <token>
  * Query: { month?: string }
- *
- * 返回数据：
- * - checkins: 打卡记录列表（日期 + 当时的连续天数）
- * - currentStreak: 当前连续打卡天数
- * - totalCheckins: 历史总打卡天数
- *
- * 前端用途：
- * - 河水日历：在日历上标记已打卡的日期
- * - 打卡统计：展示连续天数和累计天数
  */
 export async function getCheckins(req: Request, res: Response): Promise<void> {
   try {
@@ -290,17 +287,16 @@ export async function getCheckins(req: Request, res: Response): Promise<void> {
       };
     }
 
-    const checkins = await prisma.checkin.findMany({
-      where,
-      select: {
-        checkinDate: true,
-        streakCount: true,
-      },
-      orderBy: { checkinDate: 'asc' },
-    });
-
-    // 并行获取用户当前连续天数和历史总打卡天数
-    const [user, totalCheckins] = await Promise.all([
+    // 并行获取打卡记录、用户连续天数和总打卡天数
+    const [checkins, user, totalCheckins] = await Promise.all([
+      prisma.checkin.findMany({
+        where,
+        select: {
+          checkinDate: true,
+          streakCount: true,
+        },
+        orderBy: { checkinDate: 'asc' },
+      }),
       prisma.user.findUnique({
         where: { id: userId },
         select: { streakDays: true },
@@ -324,20 +320,6 @@ export async function getCheckins(req: Request, res: Response): Promise<void> {
  *
  * GET /api/diaries/stones
  * Headers: Authorization: Bearer <token>
- *
- * 石头收藏馆的核心逻辑：
- * 1. 查询所有有mainStone的日记
- * 2. 按mainStoneHash聚合相同的石头（同一个主题的石头合并）
- * 3. 按出现频次降序排列（最常出现的石头排在前面）
- *
- * 返回数据：
- * - stones: 聚合后的石头列表（内容、出现次数、出现日期、关联日记ID）
- * - totalStones: 石头总数（含重复）
- * - uniqueStones: 去重后的石头种类数
- *
- * 前端用途：
- * - Canvas河床可视化：石头大小与出现频次成正比
- * - 点击石头查看关联的所有日记
  */
 export async function getStones(req: Request, res: Response): Promise<void> {
   try {
@@ -359,8 +341,6 @@ export async function getStones(req: Request, res: Response): Promise<void> {
     });
 
     // ===== 聚合相同的石头 =====
-    // 使用mainStoneHash作为聚合key（如果没有hash则用内容本身）
-    // 这样即使用户用不同措辞描述同一个问题，只要hash相同就会聚合
     const stoneMap = new Map<string, {
       content: string;
       count: number;
@@ -406,9 +386,6 @@ export async function getStones(req: Request, res: Response): Promise<void> {
  *
  * DELETE /api/diaries/:id
  * Headers: Authorization: Bearer <token>
- *
- * 安全检查：只能删除自己的日记
- * 注意：删除日记不会影响打卡记录（打卡是不可逆的）
  */
 export async function deleteDiary(req: Request, res: Response): Promise<void> {
   try {

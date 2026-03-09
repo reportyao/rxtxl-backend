@@ -7,7 +7,7 @@
  *
  * 架构说明：
  * - 采用经典的 MVC 分层架构（Routes → Controllers → Services → Prisma ORM）
- * - 中间件链：Helmet安全头 → CORS → 请求体解析 → 日志 → 频率限制 → 路由 → 错误处理
+ * - 中间件链：Helmet安全头 → CORS → 请求体解析 → 日志 → 缓存控制 → 频率限制 → 路由 → 错误处理
  * - 认证方式：JWT Bearer Token（用户端） + Basic Auth（管理后台）
  * - 数据库：开发环境使用SQLite，生产环境切换MySQL（通过Prisma schema切换）
  *
@@ -25,7 +25,7 @@
  * - 日记内容端到端加密（服务器只存密文）
  *
  * @author 人选天选论开发团队
- * @version 1.0.0
+ * @version 1.1.0
  */
 
 import express from 'express';
@@ -36,6 +36,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { config } from './config/env';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
+import { cacheControl, requestTimeout } from './middleware/performance';
 import authRoutes from './routes/auth.routes';
 import articleRoutes from './routes/article.routes';
 import diaryRoutes from './routes/diary.routes';
@@ -118,6 +119,20 @@ app.use(express.urlencoded({ extended: true }));
  */
 app.use(morgan(config.isDev ? 'dev' : 'combined'));
 
+// ==================== 性能中间件 ====================
+
+/**
+ * 缓存控制中间件
+ * 根据路由类型设置不同的 Cache-Control 头
+ */
+app.use(cacheControl);
+
+/**
+ * 请求超时中间件
+ * 防止慢查询或死锁导致连接长时间占用，默认30秒
+ */
+app.use(requestTimeout(30000));
+
 // ==================== 频率限制（防刷防滥用） ====================
 
 /**
@@ -162,15 +177,20 @@ const loginLimiter = rateLimit({
 app.use('/api/auth/login', loginLimiter);
 
 /**
- * 写入接口速率限制
+ * 日记写入接口速率限制（仅POST方法）
  * 每分钟最多10次写入操作，防止恶意刷数据
- * 适用于日记创建等写入操作
+ *
+ * [BUG FIX] 原来的 writeLimiter 使用 app.use('/api/diaries', writeLimiter)
+ * 会对所有 /api/diaries 路由生效（包括GET请求），导致用户查看日记列表、
+ * 打卡记录、石头数据等读操作也被限速（每分钟仅10次）。
+ * 修复：改用 skip 选项，只对 POST/PUT/DELETE 方法限速，GET 请求不受影响。
  */
 const writeLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => req.method === 'GET',
   message: { code: 429, message: '操作过于频繁，请稍后再试', data: null },
 });
 app.use('/api/diaries', writeLimiter);
@@ -183,7 +203,7 @@ app.use('/api/diaries', writeLimiter);
  * 返回版本号和当前运行环境
  */
 app.get('/api/health', (_req, res) => {
-  res.json({ code: 0, message: 'ok', data: { version: '1.0.0', env: config.nodeEnv } });
+  res.json({ code: 0, message: 'ok', data: { version: '1.1.0', env: config.nodeEnv } });
 });
 
 /**

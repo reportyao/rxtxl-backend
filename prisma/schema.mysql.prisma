@@ -11,11 +11,9 @@
  * MySQL连接字符串格式：
  * mysql://USER:PASSWORD@HOST:PORT/DATABASE?connection_limit=10&pool_timeout=20
  *
- * 索引策略（针对高并发优化）：
- * - 所有外键字段都有独立索引
- * - 高频查询字段有索引覆盖
- * - 联合索引按查询模式设计（最左前缀原则）
- * - 字段类型使用精确长度，减少索引存储空间
+ * v1.1 索引优化：
+ * - 增加 mainStoneHash 索引（石头收藏馆聚合查询）
+ * - 增加 status 独立索引（文章状态筛选）
  */
 
 generator client {
@@ -49,6 +47,7 @@ model User {
   // 索引：phone已有@unique索引
   @@index([lastLoginAt])  // DAU/MAU统计查询
   @@index([createdAt])    // 新增用户趋势查询
+  @@index([streakDays])   // 打卡天数分布统计
   @@map("users")
 }
 
@@ -58,7 +57,7 @@ model Article {
   title       String    @db.VarChar(200)
   summary     String?   @db.VarChar(500)
   content     String    @db.LongText        // 富文本HTML内容
-  chapter     Int                            // 章节序号
+  chapter     Int       @unique             // 章节序号（唯一）
   status      String    @default("draft") @db.VarChar(20)
   publishedAt DateTime?
   scheduledAt DateTime?                      // 定时发布时间
@@ -91,6 +90,7 @@ model Diary {
   @@unique([userId, diaryDate])  // 每人每天一篇，同时作为查询索引
   @@index([userId])              // 查询某用户所有日记
   @@index([diaryDate])           // 按日期统计（管理后台趋势图）
+  @@index([userId, mainStoneHash]) // 石头收藏馆聚合查询
   @@map("diaries")
 }
 

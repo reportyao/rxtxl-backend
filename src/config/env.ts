@@ -30,7 +30,7 @@ export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
 
   /** 是否为开发环境（快捷判断） */
-  isDev: process.env.NODE_ENV === 'development',
+  isDev: process.env.NODE_ENV !== 'production',
 
   // ===== JWT认证配置 =====
   /**
@@ -43,7 +43,6 @@ export const config = {
   /**
    * JWT过期时间
    * 格式：数字+单位（s/m/h/d），如 '30d' = 30天
-   * 用户30天内不需要重新登录
    */
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '30d',
 
@@ -79,3 +78,16 @@ export const config = {
    */
   corsOrigin: process.env.CORS_ORIGIN || '*',
 };
+
+// ===== 生产环境配置安全检查 =====
+if (!config.isDev) {
+  if (config.jwtSecret === 'default_secret') {
+    console.warn('[WARNING] 生产环境使用了默认JWT密钥！请设置JWT_SECRET环境变量。');
+  }
+  if (config.admin.password === 'admin123456') {
+    console.warn('[WARNING] 生产环境使用了默认管理员密码！请设置ADMIN_PASSWORD环境变量。');
+  }
+  if (!config.aliyun.accessKeyId) {
+    console.warn('[WARNING] 阿里云短信配置不完整，短信功能将不可用。');
+  }
+}
