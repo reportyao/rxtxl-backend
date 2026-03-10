@@ -287,8 +287,8 @@ export async function getCheckins(req: Request, res: Response): Promise<void> {
       };
     }
 
-    // 并行获取打卡记录、用户连续天数和总打卡天数
-    const [checkins, user, totalCheckins] = await Promise.all([
+    // 并行获取打卡记录、用户连续天数、总打卡天数和日记总条数
+    const [checkins, user, totalCheckins, totalDiaries] = await Promise.all([
       prisma.checkin.findMany({
         where,
         select: {
@@ -302,12 +302,14 @@ export async function getCheckins(req: Request, res: Response): Promise<void> {
         select: { streakDays: true },
       }),
       prisma.checkin.count({ where: { userId } }),
+      prisma.diary.count({ where: { userId } }),
     ]);
 
     success(res, {
       checkins,
       currentStreak: user?.streakDays || 0,
       totalCheckins,
+      totalDiaries,
     });
   } catch (err) {
     console.error('[getCheckins]', err);
