@@ -130,14 +130,13 @@ export async function login(req: Request, res: Response): Promise<void> {
     }
 
     // 验证密码
-    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    const isMatch = await bcrypt.compare(password, user.passwordHash as string);
     if (!isMatch) {
       validationError(res, '用户名或密码错误');
       return;
     }
-
     // 获取客户端 IP
-    const clientIp = getClientIp(req);
+    const clientIp = getClientIp(req);;
     const ipRegion = await resolveIpRegion(clientIp).catch(() => '未知');
 
     // 更新最后登录信息
@@ -285,7 +284,7 @@ export async function resetPin(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    const isMatch = await bcrypt.compare(password, user.passwordHash as string);
     if (!isMatch) {
       validationError(res, '密码错误，无法重置PIN码');
       return;
