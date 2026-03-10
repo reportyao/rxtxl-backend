@@ -311,6 +311,7 @@ export async function getUsers(req: Request, res: Response): Promise<void> {
         select: {
           id: true,
           phone: true,
+          username: true,
           nickname: true,
           createdAt: true,
           lastLoginAt: true,
@@ -331,7 +332,8 @@ export async function getUsers(req: Request, res: Response): Promise<void> {
     // 手机号脱敏处理：138****1234
     const maskedUsers = users.map(user => ({
       ...user,
-      phone: user.phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2'),
+      phone: user.phone ? user.phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2') : null,
+      displayName: user.username || user.nickname || '未知用户',
       diaryCount: user._count.diaries,
       lastIpRegion: user.ipRegion || '未知',
     }));

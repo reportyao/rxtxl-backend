@@ -3,26 +3,23 @@
  * 用户认证控制器 (Auth Controller)
  * ===================================================================
  *
- * 负责用户认证相关的所有业务逻辑：
- * 1. 发送短信验证码（对接阿里云短信服务）
- * 2. 手机号+验证码 登录/注册（自动判断新老用户）
+ * v2.0 改为用户名+密码注册登录模式：
+ * 1. 注册：用户名 + 密码（bcrypt 加密存储）
+ * 2. 登录：用户名 + 密码
  * 3. 设置日记加密PIN码（服务器只存hash，不存明文）
  * 4. 验证PIN码（前端发hash，服务器比对hash）
- * 5. 重置PIN码（需短信二次验证，会清除所有历史日记）
+ * 5. 重置PIN码（会清除所有历史日记）
  * 6. 获取当前用户信息
- *
- * v1.1 优化：
- * - [BUG FIX] resetPin使用事务确保删除日记和更新PIN的原子性
- * - [安全] PIN验证增加失败次数限制（防暴力破解）
- * - [安全] pinHash/salt增加格式校验
  */
 
 import { Request, Response } from 'express';
+import bcrypt from 'bcrypt';
 import prisma from '../config/database';
-import { sendVerificationCode, verifyCode } from '../services/sms.service';
 import { generateToken } from '../utils/jwt';
 import { getClientIp, resolveIpRegion } from '../utils/ip';
 import { success, error, validationError } from '../utils/response';
+
+const BCRYPT_ROUNDS = 10;
 
 /** PIN验证失败计数器（内存存储，防止暴力破解） */
 const pinFailureCount = new Map<string, { count: number; lockUntil: number }>();
@@ -30,119 +27,147 @@ const PIN_MAX_FAILURES = 10;
 const PIN_LOCK_DURATION_MS = 15 * 60 * 1000; // 锁定15分钟
 
 /**
- * 发送短信验证码
+ * 用户注册
  *
- * POST /api/auth/send-code
- * Body: { phone: string }
+ * POST /api/auth/register
+ * Body: { username: string, password: string, confirmPassword: string }
  */
-export async function sendCode(req: Request, res: Response): Promise<void> {
+export async function register(req: Request, res: Response): Promise<void> {
   try {
-    const { phone } = req.body;
+    const { username, password, confirmPassword } = req.body;
 
-    // 校验手机号格式：必须是1开头的11位数字
-    if (!phone || !/^1[3-9]\d{9}$/.test(phone)) {
-      validationError(res, '请输入正确的手机号');
+    // 校验用户名：2-20位字母数字下划线
+    if (!username || !/^[a-zA-Z0-9_\u4e00-\u9fa5]{2,20}$/.test(username)) {
+      validationError(res, '用户名需为2-20位字母、数字、下划线或中文');
       return;
     }
 
-    const result = await sendVerificationCode(phone);
-
-    if (!result.success) {
-      error(res, result.message, 429);
+    // 校验密码长度
+    if (!password || password.length < 6 || password.length > 50) {
+      validationError(res, '密码长度需在6-50位之间');
       return;
     }
 
-    // 开发模式下在响应中返回验证码，方便调试
-    const responseData: any = { message: result.message };
-    if (result.devCode) {
-      responseData.devCode = result.devCode;
-    }
-
-    success(res, responseData, '验证码已发送');
-  } catch (err) {
-    console.error('[sendCode]', err);
-    error(res, '发送验证码失败');
-  }
-}
-
-/**
- * 用户登录/注册（合一接口）
- *
- * POST /api/auth/login
- * Body: { phone: string, code: string }
- */
-export async function login(req: Request, res: Response): Promise<void> {
-  try {
-    const { phone, code } = req.body;
-
-    if (!phone || !/^1[3-9]\d{9}$/.test(phone)) {
-      validationError(res, '请输入正确的手机号');
+    // 校验两次密码一致
+    if (password !== confirmPassword) {
+      validationError(res, '两次输入的密码不一致');
       return;
     }
 
-    if (!code || !/^\d{6}$/.test(code)) {
-      validationError(res, '请输入6位数字验证码');
+    // 检查用户名是否已存在
+    const existing = await prisma.user.findUnique({ where: { username } });
+    if (existing) {
+      validationError(res, '该用户名已被使用，请换一个');
       return;
     }
 
-    // 验证短信验证码（验证后自动从内存中删除，防止重放攻击）
-    const isValid = verifyCode(phone, code);
-    if (!isValid) {
-      validationError(res, '验证码错误或已过期');
-      return;
-    }
+    // 加密密码
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
-    // 获取客户端真实IP（支持X-Forwarded-For代理头）
+    // 获取客户端 IP
     const clientIp = getClientIp(req);
-    // 异步解析IP归属地（不阻塞登录流程，失败时使用"未知"）
     const ipRegion = await resolveIpRegion(clientIp).catch(() => '未知');
 
-    // 查找或创建用户（手机号作为唯一标识）
-    let user = await prisma.user.findUnique({ where: { phone } });
-    let isNewUser = false;
+    // 创建用户
+    const user = await prisma.user.create({
+      data: {
+        username,
+        passwordHash,
+        nickname: username,
+        lastLoginAt: new Date(),
+        lastLoginIp: clientIp,
+        ipRegion,
+      },
+    });
 
-    if (!user) {
-      // ===== 新用户注册 =====
-      isNewUser = true;
-      user = await prisma.user.create({
-        data: {
-          phone,
-          nickname: `用户${phone.slice(-4)}`,
-          lastLoginAt: new Date(),
-          lastLoginIp: clientIp,
-          ipRegion,
-        },
-      });
-    } else {
-      // ===== 老用户登录 =====
-      user = await prisma.user.update({
-        where: { id: user.id },
-        data: {
-          lastLoginAt: new Date(),
-          lastLoginIp: clientIp,
-          ipRegion,
-        },
-      });
-    }
-
-    // 生成JWT Token
-    const token = generateToken({ userId: user.id, phone: user.phone });
+    // 生成 JWT Token
+    const token = generateToken({ userId: user.id, phone: user.phone || '' });
 
     success(res, {
       token,
       user: {
         id: user.id,
-        phone: user.phone,
+        username: user.username,
         nickname: user.nickname,
         avatar: user.avatar,
         hasPinSet: !!user.pinHash,
         streakDays: user.streakDays,
       },
-      isNewUser,
-    }, isNewUser ? '注册成功' : '登录成功');
+      isNewUser: true,
+    }, '注册成功');
+  } catch (err) {
+    console.error('[register]', err);
+    error(res, '注册失败，请稍后重试');
+  }
+}
+
+/**
+ * 用户登录
+ *
+ * POST /api/auth/login
+ * Body: { username: string, password: string }
+ */
+export async function login(req: Request, res: Response): Promise<void> {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || typeof username !== 'string' || username.trim() === '') {
+      validationError(res, '请输入用户名');
+      return;
+    }
+
+    if (!password || typeof password !== 'string' || password.length === 0) {
+      validationError(res, '请输入密码');
+      return;
+    }
+
+    // 查找用户（支持用户名登录）
+    const user = await prisma.user.findUnique({ where: { username: username.trim() } });
+
+    if (!user || !user.passwordHash) {
+      validationError(res, '用户名或密码错误');
+      return;
+    }
+
+    // 验证密码
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!isMatch) {
+      validationError(res, '用户名或密码错误');
+      return;
+    }
+
+    // 获取客户端 IP
+    const clientIp = getClientIp(req);
+    const ipRegion = await resolveIpRegion(clientIp).catch(() => '未知');
+
+    // 更新最后登录信息
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        lastLoginAt: new Date(),
+        lastLoginIp: clientIp,
+        ipRegion,
+      },
+    });
+
+    // 生成 JWT Token
+    const token = generateToken({ userId: user.id, phone: user.phone || '' });
+
+    success(res, {
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        nickname: user.nickname,
+        avatar: user.avatar,
+        hasPinSet: !!user.pinHash,
+        streakDays: user.streakDays,
+      },
+      isNewUser: false,
+    }, '登录成功');
   } catch (err) {
     console.error('[login]', err);
-    error(res, '登录失败');
+    error(res, '登录失败，请稍后重试');
   }
 }
 
@@ -168,7 +193,6 @@ export async function setPin(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // 格式校验：pinHash应该是Base64编码的SHA-256哈希
     if (pinHash.length > 128) {
       validationError(res, 'PIN码哈希值格式错误');
       return;
@@ -179,7 +203,6 @@ export async function setPin(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // 存储PIN码hash和salt到用户表
     await prisma.user.update({
       where: { id: userId },
       data: { pinHash, pinSalt: salt },
@@ -198,8 +221,6 @@ export async function setPin(req: Request, res: Response): Promise<void> {
  * POST /api/auth/verify-pin
  * Headers: Authorization: Bearer <token>
  * Body: { pinHash: string }
- *
- * [安全增强] 增加失败次数限制，超过10次锁定15分钟
  */
 export async function verifyPin(req: Request, res: Response): Promise<void> {
   try {
@@ -225,9 +246,7 @@ export async function verifyPin(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // 比较hash值
     if (pinHash !== user.pinHash) {
-      // 记录失败次数
       const current = pinFailureCount.get(userId) || { count: 0, lockUntil: 0 };
       current.count++;
       if (current.count >= PIN_MAX_FAILURES) {
@@ -235,15 +254,11 @@ export async function verifyPin(req: Request, res: Response): Promise<void> {
         current.count = 0;
       }
       pinFailureCount.set(userId, current);
-
       validationError(res, 'PIN码错误');
       return;
     }
 
-    // 验证成功，清除失败计数
     pinFailureCount.delete(userId);
-
-    // 返回salt，前端用它来派生AES解密密钥
     success(res, { salt: user.pinSalt }, 'PIN码验证成功');
   } catch (err) {
     console.error('[verifyPin]', err);
@@ -252,31 +267,27 @@ export async function verifyPin(req: Request, res: Response): Promise<void> {
 }
 
 /**
- * 重置PIN码（危险操作）
+ * 重置PIN码（危险操作，会清除所有日记）
  *
  * POST /api/auth/reset-pin
  * Headers: Authorization: Bearer <token>
- * Body: { phone: string, code: string, newPinHash: string, newSalt: string }
- *
- * [BUG FIX] 使用事务确保删除日记和更新PIN的原子性
- * 原来的实现中，如果删除日记成功但更新PIN失败，会导致数据丢失但PIN未更新
+ * Body: { password: string, newPinHash: string, newSalt: string }
  */
 export async function resetPin(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user!.userId;
-    const { phone, code, newPinHash, newSalt } = req.body;
+    const { password, newPinHash, newSalt } = req.body;
 
-    // 验证手机号归属（防止篡改）
+    // 验证当前登录密码（替代原来的短信验证）
     const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user || user.phone !== phone) {
-      validationError(res, '手机号不匹配');
+    if (!user || !user.passwordHash) {
+      error(res, '用户不存在', 404);
       return;
     }
 
-    // 短信验证码二次确认
-    const isValid = verifyCode(phone, code);
-    if (!isValid) {
-      validationError(res, '验证码错误或已过期');
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!isMatch) {
+      validationError(res, '密码错误，无法重置PIN码');
       return;
     }
 
@@ -290,21 +301,16 @@ export async function resetPin(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // ===== 使用事务确保原子性 =====
+    // 使用事务确保原子性
     await prisma.$transaction(async (tx) => {
-      // 删除所有历史日记（旧密钥无法恢复，旧日记永远无法解密）
       await tx.diary.deleteMany({ where: { userId } });
-
-      // 更新为新的PIN码hash和salt
       await tx.user.update({
         where: { id: userId },
         data: { pinHash: newPinHash, pinSalt: newSalt },
       });
     });
 
-    // 清除PIN验证失败计数
     pinFailureCount.delete(userId);
-
     success(res, null, 'PIN码已重置，历史日记数据已清除');
   } catch (err) {
     console.error('[resetPin]', err);
@@ -327,6 +333,7 @@ export async function getMe(req: Request, res: Response): Promise<void> {
       select: {
         id: true,
         phone: true,
+        username: true,
         nickname: true,
         avatar: true,
         pinHash: true,
@@ -345,6 +352,7 @@ export async function getMe(req: Request, res: Response): Promise<void> {
     success(res, {
       id: user.id,
       phone: user.phone,
+      username: user.username,
       nickname: user.nickname,
       avatar: user.avatar,
       hasPinSet: !!user.pinHash,

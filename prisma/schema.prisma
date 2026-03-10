@@ -1,174 +1,83 @@
-// ===================================================================
-// Prisma数据库Schema - 人选天选论
-// ===================================================================
-//
-// 数据库设计原则：
-// 1. 隐私优先：日记内容端到端加密，服务器只存密文
-// 2. 性能优先：关键查询路径都有索引覆盖
-// 3. 数据完整性：级联删除确保用户注销时数据完全清理
-//
-// 环境切换：
-// - 开发环境：SQLite（零配置，本文件）
-// - 生产环境：MySQL（使用 prisma/schema.mysql.prisma）
-//
-// 索引策略：
-// - 所有外键字段都有索引（userId）
-// - 高频查询字段有索引（diaryDate, checkinDate, status, chapter）
-// - 联合唯一索引兼做查询索引（userId+diaryDate, userId+checkinDate）
-//
-// 迁移命令：
-// - 开发环境：npx prisma db push（直接同步schema到数据库）
-// - 生产环境：npx prisma migrate dev（生成迁移文件，可回滚）
-
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
-/// 用户表 - 存储用户基本信息和认证数据
-/// 核心字段：phone（登录凭证）、pinHash/pinSalt（日记加密验证）
 model User {
-  id            String    @id @default(uuid())
-
-  // ===== 认证信息 =====
-  phone         String    @unique  // 手机号（登录唯一标识）
-  nickname      String?            // 用户昵称（可选）
-  avatar        String?            // 头像URL（预留，V2使用）
-
-  // ===== PIN码加密相关 =====
-  // 注意：这里存的是PIN的hash，不是加密密钥本身
-  // 加密密钥在前端通过PBKDF2从PIN派生，永远不会发送到服务器
-  pinHash       String?   // PIN码的SHA-256 hash（用于验证PIN是否正确）
-  pinSalt       String?   // PBKDF2使用的随机盐值（前端生成，服务器存储）
-
-  // ===== 时间戳 =====
-  createdAt     DateTime  @default(now())  // 注册时间
-  updatedAt     DateTime  @updatedAt       // 最后更新时间
-  lastLoginAt   DateTime?                  // 最后登录时间（用于DAU/MAU统计）
-  lastCheckinAt DateTime?                  // 最后打卡时间
-
-  // ===== 登录追踪 =====
-  lastLoginIp   String?   // 最后登录IP地址
-  ipRegion      String?   // IP归属地（省份，如"广东"）
-
-  // ===== 打卡统计 =====
-  streakDays    Int       @default(0)  // 当前连续打卡天数
-
-  // ===== 关联关系 =====
-  diaries       Diary[]    // 用户的所有日记
-  checkins      Checkin[]  // 用户的所有打卡记录
-
-  // ===== 索引 =====
-  // phone已有@unique索引
-  // lastLoginAt用于DAU/MAU查询，数据量大时考虑添加索引
-  // @@index([lastLoginAt])  // 取消注释以在生产环境启用
-
+  id            String    @id @default(uuid()) @db.VarChar(36)
+  phone         String?   @unique @db.VarChar(20)
+  username      String?   @unique @db.VarChar(50)
+  passwordHash  String?   @db.VarChar(128)
+  nickname      String?   @db.VarChar(50)
+  avatar        String?   @db.VarChar(500)
+  pinHash       String?   @db.VarChar(64)
+  pinSalt       String?   @db.VarChar(64)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastLoginAt   DateTime?
+  lastCheckinAt DateTime?
+  lastLoginIp   String?   @db.VarChar(50)
+  ipRegion      String?   @db.VarChar(50)
+  streakDays    Int       @default(0)
+  diaries       Diary[]
+  checkins      Checkin[]
   @@map("users")
 }
 
-/// 文章表 - 存储连载文章内容
-/// 支持草稿/发布/归档三种状态，支持定时发布
 model Article {
-  id          String    @id @default(uuid())
-
-  // ===== 文章内容 =====
-  title       String              // 文章标题
-  summary     String?             // 文章摘要（列表页展示）
-  content     String              // 富文本HTML内容（WangEditor输出）
-  chapter     Int                 // 章节序号（用于排序和前后章节导航）
-  quotes      String?             // 金句列表，JSON数组格式：["金句1", "金句2"]
-
-  // ===== 发布状态 =====
-  status      String   @default("draft")  // draft（草稿）| published（已发布）| archived（已归档）
-  publishedAt DateTime?                    // 实际发布时间
-  scheduledAt DateTime?                    // 定时发布时间（到时间后自动发布）
-
-  // ===== 统计 =====
-  viewCount   Int      @default(0)  // 阅读次数
-
-  // ===== 时间戳 =====
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  // ===== 索引 =====
-  // status和chapter是高频查询字段
-  // @@index([status, chapter])  // 取消注释以在生产环境启用
-
+  id          String    @id @default(uuid()) @db.VarChar(36)
+  title       String    @db.VarChar(200)
+  summary     String?   @db.Text
+  content     String    @db.LongText
+  chapter     Int
+  quotes      String?   @db.Text
+  status      String    @default("draft") @db.VarChar(20)
+  publishedAt DateTime?
+  scheduledAt DateTime?
+  viewCount   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  @@index([status])
+  @@index([chapter])
   @@map("articles")
 }
 
-/// 道痕日记表 - 存储加密后的日记密文
-/// 安全设计：encryptedData和iv是AES-256-GCM加密的产物，服务器无法解密
-/// mainStone是用户可选的明文摘要，用于石头收藏馆展示
 model Diary {
-  id             String   @id @default(uuid())
-
-  // ===== 关联 =====
-  userId         String   // 所属用户ID
-
-  // ===== 加密数据 =====
-  encryptedData  String   // AES-256-GCM加密后的Base64密文
-  iv             String   // 加密使用的初始化向量（Base64）
-
-  // ===== 石头数据（明文摘要） =====
-  mainStone      String?  // 主石头内容（明文，用于石头收藏馆展示）
-  mainStoneHash  String?  // 主石头的SHA-256 hash（用于聚合相同主题的石头）
-
-  // ===== 日期 =====
-  diaryDate      String   // 日记日期，格式：YYYY-MM-DD（字符串避免时区问题）
-
-  // ===== 时间戳 =====
+  id             String   @id @default(uuid()) @db.VarChar(36)
+  userId         String   @db.VarChar(36)
+  encryptedData  String   @db.LongText
+  iv             String   @db.VarChar(100)
+  mainStone      String?  @db.Text
+  mainStoneHash  String?  @db.VarChar(64)
+  diaryDate      String   @db.VarChar(10)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
-
-  // ===== 关联关系 =====
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  // ===== 索引 =====
-  // 联合唯一索引：每人每天只能有一篇日记，同时作为查询索引
   @@unique([userId, diaryDate])
-  // userId索引用于"查询某用户所有日记"
-  // @@index([userId])  // 联合唯一索引已覆盖此查询
-
+  @@index([mainStoneHash])
   @@map("diaries")
 }
 
-/// 打卡记录表 - 记录每日打卡和当时的连续天数
-/// 独立于日记表，因为打卡是不可逆的（删除日记不影响打卡记录）
 model Checkin {
-  id          String   @id @default(uuid())
-
-  // ===== 关联 =====
-  userId      String   // 所属用户ID
-
-  // ===== 打卡数据 =====
-  checkinDate String   // 打卡日期，格式：YYYY-MM-DD
-  streakCount Int      @default(1)  // 打卡时的连续天数（历史快照，用于回溯）
-
-  // ===== 时间戳 =====
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  userId      String   @db.VarChar(36)
+  checkinDate String   @db.VarChar(10)
+  streakCount Int      @default(1)
   createdAt   DateTime @default(now())
-
-  // ===== 关联关系 =====
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  // ===== 索引 =====
-  // 联合唯一索引：每人每天只能打卡一次，同时作为查询索引
   @@unique([userId, checkinDate])
-
   @@map("checkins")
 }
 
-/// 管理员表 - 管理后台认证（预留，当前使用Basic Auth）
 model Admin {
-  id        String   @id @default(uuid())
-  username  String   @unique
-  password  String   // bcrypt hash
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  username  String   @unique @db.VarChar(50)
+  password  String   @db.VarChar(100)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
   @@map("admins")
 }

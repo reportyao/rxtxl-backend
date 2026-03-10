@@ -1,11 +1,11 @@
 import { Router } from 'express';
-import { sendCode, login, setPin, verifyPin, resetPin, getMe } from '../controllers/auth.controller';
+import { register, login, setPin, verifyPin, resetPin, getMe } from '../controllers/auth.controller';
 import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
 
 // 公开接口
-router.post('/send-code', sendCode);
+router.post('/register', register);
 router.post('/login', login);
 
 // 需要认证的接口
