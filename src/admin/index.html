@@ -261,7 +261,7 @@
     /**
      * ===== 全局状态 =====
      */
-    const API_BASE = '';
+    const API_BASE = window.location.protocol === 'https:' ? window.location.origin.replace('https:', 'http:') : '';
     let authHeader = '';
     let currentPage = 'dashboard';
     let editorInstance = null; // WangEditor 实例引用

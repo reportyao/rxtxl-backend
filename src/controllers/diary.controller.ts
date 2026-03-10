@@ -82,19 +82,12 @@ export async function createDiary(req: Request, res: Response): Promise<void> {
     }
 
     // ===== 使用事务确保日记和打卡的原子性 =====
+    // [v1.2] 从upsert改为create，支持一日多条日记
+    // 同一天的多条日记各自独立存储，打卡逻辑不变（同一天只算一次打卡）
     const result = await prisma.$transaction(async (tx) => {
-      // Upsert日记
-      const diary = await tx.diary.upsert({
-        where: {
-          userId_diaryDate: { userId, diaryDate },
-        },
-        update: {
-          encryptedData,
-          iv,
-          mainStone: mainStone || null,
-          mainStoneHash: mainStoneHash || null,
-        },
-        create: {
+      // 创建新日记（不再使用upsert，允许同一天多条）
+      const diary = await tx.diary.create({
+        data: {
           userId,
           encryptedData,
           iv,
