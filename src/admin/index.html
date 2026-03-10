@@ -539,7 +539,7 @@
           }
           tableHtml +=
             '<tr>' +
-              '<td>第' + a.chapter + '章</td>' +
+              '<td>' + (a.chapter === 0 ? '序' : '第' + a.chapter + '章') + '</td>' +
               '<td>' + escapeHtml(a.title) + '</td>' +
               '<td>' + statusTag + '</td>' +
               '<td>' + (a.viewCount || 0) + '</td>' +
@@ -716,7 +716,7 @@
     async function saveArticle(id) {
       var status = document.getElementById('artStatus').value;
       var data = {
-        chapter: parseInt(document.getElementById('artChapter').value),
+        chapter: document.getElementById('artChapter').value !== '' ? parseInt(document.getElementById('artChapter').value) : null,
         title: document.getElementById('artTitle').value,
         summary: document.getElementById('artSummary').value,
         content: getEditorContent(),
@@ -734,10 +734,11 @@
         data.scheduledAt = new Date(scheduledAt).toISOString();
       }
 
-      if (!data.title || !data.chapter) {
+      if (!data.title || data.chapter === null || data.chapter === undefined || isNaN(data.chapter)) {
         alert('请填写章节号和标题');
         return;
       }
+      // 摘要和金句允许为空，不做强制验证
 
       var res;
       try {

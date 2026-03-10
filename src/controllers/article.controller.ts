@@ -241,7 +241,7 @@ export async function adminCreateArticle(req: Request, res: Response): Promise<v
     // 检查章节号是否已被占用
     const existing = await prisma.article.findFirst({ where: { chapter } });
     if (existing) {
-      validationError(res, `第${chapter}章已存在`);
+      validationError(res, chapter === 0 ? '序章已存在' : `第${chapter}章已存在`);
       return;
     }
 

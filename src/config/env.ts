@@ -74,7 +74,7 @@ export const config = {
    * 允许的前端域名
    * - 开发环境：'*'（允许所有）
    * - 生产环境：逗号分隔的域名列表
-   *   如：'https://rxtxl.example.com,https://m.rxtxl.example.com'
+   *   如：https://rxtxl.com,https://www.rxtxl.com
    */
   corsOrigin: process.env.CORS_ORIGIN || '*',
 };
