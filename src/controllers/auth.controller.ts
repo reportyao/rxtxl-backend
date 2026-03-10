@@ -92,6 +92,7 @@ export async function register(req: Request, res: Response): Promise<void> {
         avatar: user.avatar,
         hasPinSet: !!user.pinHash,
         streakDays: user.streakDays,
+        salt: user.pinSalt || undefined,
       },
       isNewUser: true,
     }, '注册成功');
@@ -161,6 +162,7 @@ export async function login(req: Request, res: Response): Promise<void> {
         avatar: user.avatar,
         hasPinSet: !!user.pinHash,
         streakDays: user.streakDays,
+        salt: user.pinSalt || undefined,
       },
       isNewUser: false,
     }, '登录成功');
